@@ -1,0 +1,19 @@
+{
+  "name": "discord-event-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for GTA V Event Planner (Base44 integration ready).",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "register-commands": "node src/index.js register"
+  },
+  "author": "Vega & Cipher",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.0",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "node-cron": "^3.0.3"
+  }
+}
