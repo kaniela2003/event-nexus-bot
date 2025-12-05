@@ -6,20 +6,19 @@ const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.CLIENT_ID;
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds]
 });
 
-// Clean modern ready event (Discord.js v15 safe)
+// Updated for Discord.js v15 safety
 client.once("clientReady", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
+// Load commands first
 await loadCommands(client);
 
-(async () => {
-  // Register slash commands globally
-  await registerGlobalCommands(clientId, token);
+// Then register global slash commands
+await registerGlobalCommands(clientId, token);
 
-  // Login bot
-  client.login(token);
-})();
+// Finally log in
+client.login(token);

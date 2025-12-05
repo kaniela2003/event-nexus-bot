@@ -1,33 +1,39 @@
-// src/commands.js — auto-loads command definitions + handlers
+import { REST, Routes } from "discord.js";
+import fs from "fs";
+import path from "path";
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+// Load all commands from /src/commands folder
+export async function loadCommands(client) {
+  const commandsPath = path.resolve("src/commands");
+  const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+  client.commands = new Map();
 
-export const slashCommands = [];
-export const commandHandlers = new Map();
-
-const commandsPath = path.join(__dirname, "commands");
-const commandFiles = fs.readdirSync(commandsPath).filter((file) => file.endsWith(".js"));
-
-for (const file of commandFiles) {
-  const filePath = path.join(commandsPath, file);
-  const commandModule = await import(`./commands/${file}`);
-
-  const cmd = commandModule.default ?? commandModule;
-
-  if (cmd?.data && typeof cmd.data.toJSON === "function") {
-    slashCommands.push(cmd.data.toJSON());
-  } else {
-    console.warn(`⚠️ Command file ${file} is missing "data" or toJSON().`);
+  for (const file of files) {
+    const command = await import(`./commands/${file}`);
+    if (command.data && command.execute) {
+      client.commands.set(command.data.name, command);
+    }
   }
 
-  if (cmd?.data?.name && typeof cmd.execute === "function") {
-    commandHandlers.set(cmd.data.name, cmd.execute);
-  } else {
-    console.warn(`⚠️ Command file ${file} is missing "execute()".`);
+  console.log(`⚡ Loaded ${client.commands.size} commands.`);
+}
+
+// Register slash commands globally
+export async function registerGlobalCommands(clientId, token) {
+  const commandsPath = path.resolve("src/commands");
+  const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
+
+  const body = [];
+
+  for (const file of files) {
+    const command = await import(`./commands/${file}`);
+    if (command.data) body.push(command.data.toJSON());
   }
+
+  const rest = new REST({ version: "10" }).setToken(token);
+
+  await rest.put(Routes.applicationCommands(clientId), { body });
+
+  console.log("✅ Global slash commands synced to Discord.");
 }
