@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "name": "discord-event-bot",
   "version": "1.0.0",
   "description": "Discord bot for GTA V Event Planner (Base44 integration ready).",
