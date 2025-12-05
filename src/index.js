@@ -38,7 +38,7 @@ async function registerGlobalCommands() {
 }
 
 // When bot is ready
-client.once("ready", async () => {
+client.once("clientready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 
   // Sync slash commands on every Railway boot
