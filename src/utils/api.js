@@ -1,39 +1,13 @@
 // src/utils/api.js
 import axios from "axios";
 
-const base = process.env.NEXUS_API_URL;
-const apiKey = process.env.BASE44_API_KEY;
-
-if (!base) {
-  console.warn("NEXUS_API_URL is not set in environment variables.");
-}
-if (!apiKey) {
-  console.warn("BASE44_API_KEY is not set in environment variables.");
-}
-
-// Simple status check – pulls 1 Event just to verify connectivity
 export async function getNexusStatus() {
-  if (!base || !apiKey) {
-    return { ok: false, message: "NEXUS_API_URL or BASE44_API_KEY not set." };
-  }
+  const base = process.env.NEXUS_API_URL;
+  if (!base) return { ok: false, message: "NEXUS_API_URL not set." };
 
   try {
-    const res = await axios.get(`${base}/entities/Event`, {
-      headers: {
-        api_key: apiKey,
-        "Content-Type": "application/json",
-      },
-      params: {
-        limit: 1,
-      },
-    });
-
-    return {
-      ok: true,
-      status: res.status,
-      count: Array.isArray(res.data) ? res.data.length : 0,
-      data: res.data,
-    };
+    const res = await axios.get(base);
+    return { ok: true, status: res.status, data: res.data };
   } catch (err) {
     return {
       ok: false,
@@ -44,16 +18,15 @@ export async function getNexusStatus() {
   }
 }
 
-// Helper to create an Event via Entities API
 export async function createNexusEvent(payload) {
-  if (!base || !apiKey) {
-    throw new Error("NEXUS_API_URL or BASE44_API_KEY not set.");
-  }
+  const base = process.env.NEXUS_API_URL;
+  if (!base) throw new Error("NEXUS_API_URL not set.");
 
-  const res = await axios.post(`${base}/entities/Event`, payload, {
+  const res = await axios.post(`${base}/events`, payload, {
     headers: {
-      api_key: apiKey,
       "Content-Type": "application/json",
+      // If your Base44 function checks an API key, uncomment this and set BASE44_API_KEY in Railway:
+      // "x-api-key": process.env.BASE44_API_KEY,
     },
   });
 
