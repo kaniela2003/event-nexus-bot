@@ -9,25 +9,25 @@ const apiBase = process.env.NEXUS_API_URL;
 export const data = new SlashCommandBuilder()
   .setName("createevent")
   .setDescription("Create a new GTA Online event.")
-  .addStringOption(opt =>
+  .addStringOption((opt) =>
     opt
       .setName("title")
       .setDescription("Event title")
       .setRequired(true)
   )
-  .addStringOption(opt =>
+  .addStringOption((opt) =>
     opt
       .setName("time")
       .setDescription("Event time (e.g. 2025-12-05 20:00 PST)")
       .setRequired(true)
   )
-  .addStringOption(opt =>
+  .addStringOption((opt) =>
     opt
       .setName("description")
       .setDescription("Short description of the event")
       .setRequired(false)
   )
-  .addIntegerOption(opt =>
+  .addIntegerOption((opt) =>
     opt
       .setName("max")
       .setDescription("Max players (optional)")
@@ -57,13 +57,20 @@ export async function execute(interaction) {
         maxPlayers: max,
         guildId: interaction.guildId,
         channelId: interaction.channelId,
-        createdBy: interaction.user.id
+        createdBy: interaction.user.id,
       });
 
       const eventId = res.data?.id ?? res.data?.eventId ?? "unknown";
       apiResult = `Synced with Nexus (ID: ${eventId}).`;
     } catch (err) {
-      console.error("❌ Error syncing event to Nexus API:", err?.message ?? err);
+      const status = err?.response?.status;
+      const data = err?.response?.data;
+
+      console.error("❌ Error syncing event to Nexus API:");
+      console.error("Status:", status);
+      console.error("Response:", data);
+      console.error("Message:", err?.message ?? err);
+
       apiResult =
         "⚠ Failed to sync with Nexus API, but the Discord event message was still created.";
     }
@@ -71,7 +78,7 @@ export async function execute(interaction) {
 
   const fields = [
     { name: "Time", value: time, inline: true },
-    { name: "Host", value: `<@${interaction.user.id}>`, inline: true }
+    { name: "Host", value: `<@${interaction.user.id}>`, inline: true },
   ];
 
   if (max !== null) {
