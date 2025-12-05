@@ -1,7 +1,15 @@
-const { SlashCommandBuilder } = require('discord.js');
-module.exports = {
-  data: new SlashCommandBuilder().setName('ping').setDescription('Check if the bot is online.'),
-  async execute(interaction) {
-    await interaction.reply({ content: 'Pong 🐍 Bot is alive and listening.', ephemeral: true });
-  },
-};
+// src/commands/ping.js
+
+import { SlashCommandBuilder } from "discord.js";
+
+export const data = new SlashCommandBuilder()
+  .setName("ping")
+  .setDescription("Check if Event Nexus bot is alive.");
+
+export async function execute(interaction) {
+  const now = Date.now();
+  const reply = await interaction.reply({ content: "Pinging...", fetchReply: true });
+  const latency = Date.now() - now;
+
+  await interaction.editReply(`🏓 Pong! Bot latency: \`${latency}ms\``);
+}

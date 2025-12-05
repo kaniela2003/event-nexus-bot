@@ -1,151 +1,33 @@
-// src/utils/api.js
-const axios = require('axios');
-const config = require('../../config.json');
+// src/utils/api.js — helper for talking to your Base44 Event Nexus API
 
-// ---------- Supabase REST client ----------
-const supabaseRest = axios.create({
-  baseURL: `${config.supabaseUrl}/rest/v1`,
-  headers: {
-    apikey: config.supabaseAnonKey,
-    Authorization: `Bearer ${config.supabaseAnonKey}`,
-    'Content-Type': 'application/json',
-  },
-  timeout: 5000,
-});
+import axios from "axios";
 
-// ---------- RSVP via Edge Function ----------
-async function rsvpEvent(eventId, payload) {
-  const body = {
-    event_id: eventId,
-    discord_id: payload.discord_id,
-    discord_name: payload.discord_name,
-  };
+const baseUrl = process.env.NEXUS_API_URL;
 
-  const res = await axios.post(
-    config.supabaseRsvpFunction,
-    body,
-    {
-      headers: {
-        apikey: config.supabaseAnonKey,
-        Authorization: `Bearer ${config.supabaseAnonKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 5000,
-    }
-  );
-
-  return res.data; // expected: { status: "confirmed" | "waitlist" | "blocked", ... }
-}
-
-// ---------- Events ----------
-async function getEvent(eventId) {
-  const res = await supabaseRest.get('/events', {
-    params: {
-      select: '*',
-      id: `eq.${eventId}`,
-      limit: 1,
-    },
-  });
-
-  const rows = res.data;
-  if (!rows || rows.length === 0) {
-    const error = new Error('Event not found');
-    error.code = 'EVENT_NOT_FOUND';
-    throw error;
+/**
+ * Simple health/status check to see if the Nexus API is reachable.
+ * You can change the path later to match your real backend.
+ */
+export async function getNexusStatus() {
+  if (!baseUrl) {
+    return {
+      ok: false,
+      message: "NEXUS_API_URL is not set in environment."
+    };
   }
 
-  return rows[0];
-}
-
-async function getEventAttendees(eventId) {
-  const event = await getEvent(eventId);
-
-  const res = await supabaseRest.get('/attendees', {
-    params: {
-      select: '*',
-      event_id: `eq.${eventId}`,
-      order: 'rsvp_at.asc',
-    },
-  });
-
-  const attendees = res.data || [];
-
-  return {
-    event,
-    attendees,
-  };
-}
-
-async function createEvent(event) {
-  const res = await supabaseRest.post(
-    '/events',
-    event,
-    {
-      headers: {
-        apikey: config.supabaseAnonKey,
-        Authorization: `Bearer ${config.supabaseAnonKey}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation',
-      },
-      params: {
-        select: '*',
-      },
-    }
-  );
-
-  const rows = res.data;
-  if (!rows || rows.length === 0) {
-    throw new Error('Failed to create event');
+  try {
+    // You can adjust this route once your Base44 backend is defined
+    const res = await axios.get(baseUrl);
+    return {
+      ok: true,
+      status: res.status,
+      data: res.data
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err.message ?? "Request to Nexus API failed."
+    };
   }
-
-  return rows[0];
 }
-
-// ---------- Guild settings (per server config) ----------
-async function getGuildSettings(guildId) {
-  const res = await supabaseRest.get('/guild_settings', {
-    params: {
-      select: '*',
-      guild_id: `eq.${guildId}`,
-      limit: 1,
-    },
-  });
-
-  const rows = res.data;
-  if (!rows || rows.length === 0) return null;
-  return rows[0];
-}
-
-async function upsertGuildSettings(settings) {
-  const res = await supabaseRest.post(
-    '/guild_settings',
-    settings,
-    {
-      headers: {
-        apikey: config.supabaseAnonKey,
-        Authorization: `Bearer ${config.supabaseAnonKey}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation',
-      },
-      params: {
-        select: '*',
-      },
-    }
-  );
-
-  const rows = res.data;
-  if (!rows || rows.length === 0) {
-    throw new Error('Failed to upsert guild_settings');
-  }
-  return rows[0];
-}
-
-// ---------- Exports ----------
-module.exports = {
-  rsvpEvent,
-  getEvent,
-  getEventAttendees,
-  createEvent,
-  getGuildSettings,
-  upsertGuildSettings,
-};
