@@ -7,7 +7,8 @@ export const data = new SlashCommandBuilder()
   .setDescription("Set the default channel for Event Nexus event announcements.")
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(opt =>
-    opt.setName("channel")
+    opt
+      .setName("channel")
       .setDescription("Channel where Event Nexus will post events.")
       .setRequired(true)
   );
@@ -17,12 +18,14 @@ export async function execute(interaction) {
 
   if (!channel.isTextBased()) {
     return interaction.reply({
-      content: "❌ That channel cannot receive event posts.",
+      content: "❌ That channel cannot receive event posts. Choose a text/announcement channel.",
       ephemeral: true,
     });
   }
 
   const updated = setConfig({ defaultEventChannelId: channel.id });
+
+  console.log("[EventNexus] Default event channel set to:", updated.defaultEventChannelId);
 
   return interaction.reply({
     content: `✅ Default event channel set to ${channel} (\`${channel.id}\`).`,
