@@ -2,18 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import os from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Base config shipped with the app (read-only in production)
-// Assumes: <project-root>/config.json
-const rootConfigPath = path.join(__dirname, "..", "..", "config.json");
+// Static config (committed)
+const baseConfigPath = path.join(__dirname, "..", "..", "config.json");
 
-// Runtime override (safe to write, especially on Railway)
-// On Railway this will be something like /tmp/event-nexus-config.json
-const runtimeConfigPath = path.join(os.tmpdir(), "event-nexus-config.json");
+// Runtime config (must exist in repo)
+const runtimeConfigPath = path.join(__dirname, "..", "..", ".runtime-config.json");
 
 function readJson(filePath) {
   try {
@@ -21,45 +18,27 @@ function readJson(filePath) {
     const raw = fs.readFileSync(filePath, "utf8");
     return JSON.parse(raw);
   } catch (err) {
-    console.warn("[EventNexus] Failed to read JSON from", filePath, ":", err.message);
+    console.warn("[EventNexus] Failed to read JSON", filePath, ":", err.message);
     return null;
   }
 }
 
 export function getConfig() {
-  // 1) Prefer runtime overrides if present
-  const runtime = readJson(runtimeConfigPath);
-  if (runtime) {
-    console.log("[EventNexus] Using runtime config at", runtimeConfigPath);
-    return runtime;
-  }
+  const base = readJson(baseConfigPath) ?? {};
+  const runtime = readJson(runtimeConfigPath) ?? {};
 
-  // 2) Fallback to root config.json
-  const base = readJson(rootConfigPath);
-  if (base) {
-    console.log("[EventNexus] Using base config at", rootConfigPath);
-    return base;
-  }
-
-  console.warn("[EventNexus] No config.json found. Using empty config.");
-  return {};
+  return { ...base, ...runtime };
 }
 
 export function setConfig(partial) {
-  const existing = getConfig();
-  const updated = { ...existing, ...partial };
+  const current = getConfig();
+  const updated = { ...current, ...partial };
 
   try {
-    const dir = path.dirname(runtimeConfigPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
     fs.writeFileSync(runtimeConfigPath, JSON.stringify(updated, null, 2), "utf8");
-    console.log("[EventNexus] Runtime config updated at", runtimeConfigPath);
+    console.log("[EventNexus] Updated runtime config at", runtimeConfigPath);
   } catch (err) {
-    console.error("[EventNexus] Failed to write runtime config:", err);
-    // Don't throw – let the bot continue running
+    console.error("[EventNexus] Failed to write runtime config:", err.message);
   }
 
   return updated;
