@@ -2,17 +2,18 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, Collection } from "discord.js";
 import { loadCommands, registerGlobalCommands } from "./commands.js";
-import { handleRsvpButton } from "./rsvp.js";
+import { handleEventButton } from "./commands/create-event.js";
 
-// Create the client
+// Create Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
   ],
 });
 
+// Will hold all slash commands keyed by name
 client.commands = new Collection();
 
 async function init() {
@@ -24,7 +25,7 @@ async function init() {
     console.log("📡 Logging into Discord...");
     await client.login(process.env.DISCORD_BOT_TOKEN);
 
-    console.log("📦 Registering slash commands for guild...");
+    console.log("📦 Registering guild slash commands...");
     await registerGlobalCommands(commands);
 
     console.log("🤖 Event Nexus bot is fully online.");
@@ -33,7 +34,7 @@ async function init() {
   }
 }
 
-client.on("ready", () => {
+client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
@@ -43,14 +44,18 @@ client.on("interactionCreate", async (interaction) => {
     // Slash commands
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
-      if (!command) return;
+      if (!command) {
+        console.warn(`⚠️ Unknown command: /${interaction.commandName}`);
+        return;
+      }
+
       await command.execute(interaction);
       return;
     }
 
-    // RSVP buttons
+    // Event RSVP buttons (Yes / No / Cancel)
     if (interaction.isButton()) {
-      await handleRsvpButton(interaction);
+      await handleEventButton(interaction);
       return;
     }
   } catch (err) {

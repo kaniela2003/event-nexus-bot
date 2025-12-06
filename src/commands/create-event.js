@@ -7,12 +7,69 @@ import {
   ButtonStyle,
 } from "discord.js";
 import axios from "axios";
-import crypto from "node:crypto";
-import { getConfig } from "../utils/config.js";
-import { registerEvent } from "../rsvp.js";
 
-const apiBase = process.env.NEXUS_API_URL;
+const apiBase = process.env.NEXUS_API_URL || null;
+const apiKey = process.env.BASE44_API_KEY || null;
 
+// In-memory RSVP state, keyed by Discord message ID
+// This resets if the bot restarts.
+const eventState = new Map();
+
+/**
+ * Build the event embed from state.
+ */
+function buildEventEmbed(state) {
+  const yesList = state.yes.length
+    ? state.yes.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n")
+    : "None";
+
+  const waitList = state.waitlist.length
+    ? state.waitlist.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n")
+    : "None";
+
+  const noList = state.no.length
+    ? state.no.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n")
+    : "None";
+
+  return new EmbedBuilder()
+    .setTitle(`🎮 ${state.title}`)
+    .setDescription(state.description || "No description provided.")
+    .addFields(
+      { name: "🕒 Time", value: state.timeText, inline: false },
+      { name: "🎯 Max slots", value: String(state.maxPlayers), inline: true },
+      { name: `✅ Yes (${state.yes.length}/${state.maxPlayers})`, value: yesList, inline: false },
+      { name: `📥 Waitlist (${state.waitlist.length})`, value: waitList, inline: false },
+      { name: `❌ No (${state.no.length})`, value: noList, inline: false }
+    )
+    .setFooter({ text: `Created by ${state.createdByName}` })
+    .setTimestamp();
+}
+
+/**
+ * Build Yes / No / Cancel buttons.
+ */
+function buildEventButtons(eventKey) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`event:${eventKey}:yes`)
+      .setLabel("✅ Yes")
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId(`event:${eventKey}:no`)
+      .setLabel("❌ No")
+      .setStyle(ButtonStyle.Danger),
+
+    new ButtonBuilder()
+      .setCustomId(`event:${eventKey}:cancel`)
+      .setLabel("🗑 Cancel RSVP")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+/**
+ * Slash command definition
+ */
 export const data = new SlashCommandBuilder()
   .setName("createevent")
   .setDescription("Create a new GTA Online event.")
@@ -20,115 +77,147 @@ export const data = new SlashCommandBuilder()
     opt.setName("title").setDescription("Event title").setRequired(true)
   )
   .addStringOption((opt) =>
-    opt
-      .setName("time")
-      .setDescription("Event time (e.g. 2025-12-05 20:00 PST)")
-      .setRequired(true)
+    opt.setName("time").setDescription("Event time (e.g. 2025-12-05 20:00 PST)").setRequired(true)
   )
   .addStringOption((opt) =>
-    opt
-      .setName("description")
-      .setDescription("Short description of the event")
-      .setRequired(false)
+    opt.setName("description").setDescription("Short description").setRequired(false)
   )
   .addIntegerOption((opt) =>
     opt
-      .setName("slots")
-      .setDescription("Max number of players for this event")
-      .setRequired(true)
+      .setName("max")
+      .setDescription("Max players (default 30)")
+      .setRequired(false)
+      .setMinValue(1)
+      .setMaxValue(100)
   );
 
+/**
+ * Slash command handler
+ */
 export async function execute(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   const title = interaction.options.getString("title", true);
-  const time = interaction.options.getString("time", true);
-  const description =
-    interaction.options.getString("description") || "No description provided.";
-  const maxSlots = interaction.options.getInteger("slots", true);
+  const timeText = interaction.options.getString("time", true);
+  const description = interaction.options.getString("description") || "";
+  const maxPlayers = interaction.options.getInteger("max") ?? 30;
 
-  const cfg = getConfig();
+  // Sync to backend (optional)
+  let backendId = null;
 
-  let targetChannel = interaction.channel;
-  if (cfg.defaultEventChannelId) {
-    const candidate = interaction.client.channels.cache.get(
-      cfg.defaultEventChannelId
-    );
-    if (candidate && candidate.isTextBased()) {
-      targetChannel = candidate;
-    }
-  }
-
-  // Generate a simple eventId for RSVP tracking
-  const eventId =
-    crypto.randomUUID?.() ?? Math.random().toString(36).slice(2, 10);
-
-  const embed = new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(description)
-    .addFields(
-      {
-        name: "Time",
-        value: time,
-        inline: false,
-      },
-      {
-        name: `Spots (0/${maxSlots})`,
-        value: "—",
-        inline: false,
-      },
-      {
-        name: "Waitlist (0)",
-        value: "—",
-        inline: false,
-      }
-    )
-    .setFooter({ text: `Event ID: ${eventId}` })
-    .setTimestamp(new Date());
-
-  const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`rsvp:yes:${eventId}`)
-      .setLabel("Yes")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`rsvp:no:${eventId}`)
-      .setLabel("No")
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId(`rsvp:cancel:${eventId}`)
-      .setLabel("Cancel RSVP")
-      .setStyle(ButtonStyle.Secondary)
-  );
-
-  const message = await targetChannel.send({
-    embeds: [embed],
-    components: [buttons],
-  });
-
-  // Register event in memory for RSVP handling
-  registerEvent(eventId, maxSlots);
-
-  // OPTIONAL: sync with your app backend
   if (apiBase) {
     try {
-      await axios.post(`${apiBase}/events`, {
-        eventId,
+      const payload = {
         title,
-        time,
+        time: timeText,
         description,
-        maxSlots,
-        discordMessageId: message.id,
-        discordChannelId: message.channel.id,
-        guildId: message.guildId,
+        maxPlayers,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        createdBy: interaction.user.id,
+      };
+
+      const res = await axios.post(`${apiBase}/events`, payload, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { "x-api-key": apiKey } : {}),
+        },
       });
+
+      backendId = res.data?.id || null;
+      console.log("Event synced to Nexus API:", backendId);
     } catch (err) {
-      console.error("[EventNexus] Failed to sync event to API:", err.message);
-      // Not fatal to Discord flow
+      console.error("Failed backend sync:", err.message);
     }
   }
 
-  await interaction.editReply(
-    `✅ Event created and posted in ${targetChannel}.\nEvent ID: \`${eventId}\`, max slots: **${maxSlots}**.`
-  );
+  const state = {
+    backendId,
+    title,
+    timeText,
+    description,
+    maxPlayers,
+    guildId: interaction.guildId,
+    channelId: interaction.channelId,
+    createdBy: interaction.user.id,
+    createdByName: interaction.user.tag,
+    yes: [],
+    waitlist: [],
+    no: [],
+  };
+
+  const eventKey = backendId || `local-${Date.now()}`;
+  const embed = buildEventEmbed(state);
+  const row = buildEventButtons(eventKey);
+
+  const message = await interaction.followUp({
+    embeds: [embed],
+    components: [row],
+    fetchReply: true,
+  });
+
+  state.messageId = message.id;
+  state.eventKey = eventKey;
+
+  eventState.set(message.id, state);
+  console.log("Event tracked:", message.id);
+}
+
+/**
+ * Handle RSVP buttons: Yes / No / Cancel
+ */
+export async function handleEventButton(interaction) {
+  const { customId, message, user } = interaction;
+  const [prefix, eventKey, action] = customId.split(":");
+
+  if (prefix !== "event") return;
+
+  const messageId = message.id;
+  const state = eventState.get(messageId);
+
+  if (!state) {
+    return interaction.reply({
+      content: "⚠ RSVP tracking reset. Event must be recreated.",
+      ephemeral: true,
+    });
+  }
+
+  const userId = user.id;
+
+  // Remove user from all lists first
+  state.yes = state.yes.filter((id) => id !== userId);
+  state.no = state.no.filter((id) => id !== userId);
+  state.waitlist = state.waitlist.filter((id) => id !== userId);
+
+  if (action === "yes") {
+    if (state.yes.length < state.maxPlayers) {
+      state.yes.push(userId);
+    } else {
+      state.waitlist.push(userId);
+    }
+  }
+
+  if (action === "no") {
+    state.no.push(userId);
+    while (state.yes.length < state.maxPlayers && state.waitlist.length > 0) {
+      const promoted = state.waitlist.shift();
+      state.yes.push(promoted);
+    }
+  }
+
+  if (action === "cancel") {
+    while (state.yes.length < state.maxPlayers && state.waitlist.length > 0) {
+      const promoted = state.waitlist.shift();
+      state.yes.push(promoted);
+    }
+  }
+
+  const updatedEmbed = buildEventEmbed(state);
+
+  await interaction.update({
+    embeds: [updatedEmbed],
+    components: message.components,
+  });
+
+  eventState.set(messageId, state);
 }
