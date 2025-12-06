@@ -1,8 +1,9 @@
 // src/commands.js
-import { REST, Routes } from "discord.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { REST, Routes, Collection } from "discord.js";
+import { getConfig } from "./utils/config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +31,7 @@ export async function loadCommands() {
 
     if (!data || !execute) {
       console.warn(
-        ⚠️ Skipping command file ${file} (missing data or execute export)`
+        `⚠️ Skipping command file ${file} (missing data or execute export)`
       );
       continue;
     }
@@ -57,8 +58,10 @@ export async function registerGlobalCommands(commands) {
   try {
     console.log("🔃 Registering guild slash commands...");
 
+    const cfg = getConfig();
+
     await rest.put(
-      Routes.applicationGuildCommands(config.clientId, config.guildId),
+      Routes.applicationGuildCommands(cfg.clientId, cfg.guildId),
       { body }
     );
 
