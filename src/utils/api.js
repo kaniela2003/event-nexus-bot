@@ -1,7 +1,8 @@
 // src/utils/api.js
 import axios from "axios";
 
-// Should be: https://eventnexus.base44.app/functions/api
+// This must be the FULL events endpoint, e.g.:
+// NEXUS_API_URL = https://eventnexus.base44.app/functions/api/events
 const base = process.env.NEXUS_API_URL;
 
 if (!base) {
@@ -14,21 +15,22 @@ export async function getNexusStatus() {
   }
 
   try {
+    // Health check: simple GET to the same endpoint
     const res = await axios.get(base, {
-      // Keep a timeout so Discord doesn't hang forever
-      timeout: 8000
+      timeout: 8000,
     });
+
     return {
       ok: true,
       status: res.status,
-      data: res.data
+      data: res.data,
     };
   } catch (err) {
     return {
       ok: false,
       message: err.message,
       status: err.response?.status,
-      data: err.response?.data
+      data: err.response?.data,
     };
   }
 }
@@ -38,14 +40,12 @@ export async function createNexusEvent(payload) {
     throw new Error("NEXUS_API_URL not set.");
   }
 
-  const url = `${base.replace(/\/+$/, "")}/events`;
-  // => https://eventnexus.base44.app/functions/api/events
-
-  const res = await axios.post(url, payload, {
+  // POST directly to the same endpoint
+  const res = await axios.post(base, payload, {
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
-    timeout: 8000
+    timeout: 8000,
   });
 
   return res.data;
