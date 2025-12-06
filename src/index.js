@@ -1,67 +1,69 @@
 // src/index.js
 import "dotenv/config";
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, Collection } from "discord.js";
 import { loadCommands, registerGlobalCommands } from "./commands.js";
+import { handleRsvpButton } from "./rsvp.js";
 
-const token = process.env.DISCORD_BOT_TOKEN;
-const clientId = process.env.CLIENT_ID;
-
-if (!token) {
-  console.error("❌ DISCORD_BOT_TOKEN is not set.");
-  process.exit(1);
-}
-if (!clientId) {
-  console.error("❌ CLIENT_ID is not set.");
-  process.exit(1);
-}
-
+// Create the client
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
 });
 
-// Standard ready event
-client.once("ready", () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-});
+client.commands = new Collection();
 
-// Slash command handler
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
-  const command = client.commands.get(interaction.commandName);
-
-  if (!command) {
-    return interaction.reply({
-      content: "⚠️ Command not wired correctly.",
-      ephemeral: true,
-    });
-  }
-
+async function init() {
   try {
-    await command.execute(interaction);
-  } catch (err) {
-    console.error(`💥 Error running /${interaction.commandName}:`, err);
+    console.log("🔍 Loading commands...");
+    const commands = await loadCommands();
+    client.commands = commands;
 
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({
-        content: "⚠️ Something went wrong while executing.",
-      });
-    } else {
+    console.log("📡 Logging into Discord...");
+    await client.login(process.env.DISCORD_BOT_TOKEN);
+
+    console.log("📦 Registering slash commands for guild...");
+    await registerGlobalCommands(commands);
+
+    console.log("🤖 Event Nexus bot is fully online.");
+  } catch (err) {
+    console.error("❌ Failed to initialize bot:", err);
+  }
+}
+
+client.on("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+// Handle slash commands + RSVP buttons
+client.on("interactionCreate", async (interaction) => {
+  try {
+    // Slash commands
+    if (interaction.isChatInputCommand()) {
+      const command = client.commands.get(interaction.commandName);
+      if (!command) return;
+      await command.execute(interaction);
+      return;
+    }
+
+    // RSVP buttons
+    if (interaction.isButton()) {
+      await handleRsvpButton(interaction);
+      return;
+    }
+  } catch (err) {
+    console.error("❌ Error handling interaction:", err);
+
+    if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
-        content: "⚠️ Something went wrong while executing.",
+        content: "❌ Something went wrong handling that interaction.",
         ephemeral: true,
       });
     }
   }
 });
 
-(async () => {
-  // 🔥 FIX: assign loaded commands into client.commands
-  client.commands = await loadCommands(client);
-
-  // Register guild commands
-  await registerGlobalCommands(client.commands);
-
-  // Login the bot
-  await client.login(token);
-})();
+// Boot the bot
+init();

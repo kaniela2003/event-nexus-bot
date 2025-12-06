@@ -1,6 +1,17 @@
 // src/commands/create-event.js
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { createNexusEvent } from "../utils/api.js";
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from "discord.js";
+import axios from "axios";
+import crypto from "node:crypto";
+import { getConfig } from "../utils/config.js";
+import { registerEvent } from "../rsvp.js";
+
+const apiBase = process.env.NEXUS_API_URL;
 
 export const data = new SlashCommandBuilder()
   .setName("createevent")
@@ -22,81 +33,102 @@ export const data = new SlashCommandBuilder()
   )
   .addIntegerOption((opt) =>
     opt
-      .setName("capacity")
-      .setDescription("Max players (optional)")
-      .setRequired(false)
+      .setName("slots")
+      .setDescription("Max number of players for this event")
+      .setRequired(true)
   );
 
 export async function execute(interaction) {
-  const title = interaction.options.getString("title", true);
-  const timeInput = interaction.options.getString("time", true);
-  const description = interaction.options.getString("description") ?? "";
-  const capacity = interaction.options.getInteger("capacity") ?? null;
-
-  // Private “receipt” for you
   await interaction.deferReply({ ephemeral: true });
 
-  try {
-    // Create event in Nexus backend
-    const event = await createNexusEvent({
-      title,
-      time: timeInput,
-      description,
-      maxPlayers: capacity,
-      guildId: interaction.guildId,
-      channelId: interaction.channelId,
-      createdBy: interaction.user.id,
-    });
+  const title = interaction.options.getString("title", true);
+  const time = interaction.options.getString("time", true);
+  const description =
+    interaction.options.getString("description") || "No description provided.";
+  const maxSlots = interaction.options.getInteger("slots", true);
 
-    // Build the public embed
-    const embed = new EmbedBuilder()
-      .setTitle(title)
-      .setDescription(description || "No description provided.")
-      .addFields(
-        { name: "Time", value: timeInput, inline: true },
-        {
-          name: "Capacity",
-          value: capacity ? String(capacity) : "Not set",
-          inline: true,
-        },
-        {
-          name: "Created By",
-          value: `<@${interaction.user.id}>`,
-          inline: true,
-        },
-        {
-          name: "Event ID",
-          value: event?.id ? String(event.id) : "N/A",
-          inline: true,
-        }
-      )
-      .setFooter({ text: "Synced with Event Nexus" })
-      .setTimestamp(new Date());
+  const cfg = getConfig();
 
-    // 🔓 Public message in the channel
-    const publicMessage = await interaction.channel.send({
-      embeds: [embed],
-    });
-
-    // Optional: show the link to the public post in your private reply
-    await interaction.editReply({
-      content: `✅ Event created and posted: ${publicMessage.url}`,
-      embeds: [],
-    });
-  } catch (err) {
-    const backend = err.response?.data;
-    console.error("Error syncing event to Nexus:", backend || err);
-
-    const detail =
-      backend?.error ||
-      backend?.message ||
-      (typeof backend === "string" ? backend : null) ||
-      err.message ||
-      "Unknown backend error";
-
-    await interaction.editReply({
-      content:
-        "⚠️ I couldn't sync this event to the Nexus backend.\n> " + detail,
-    });
+  let targetChannel = interaction.channel;
+  if (cfg.defaultEventChannelId) {
+    const candidate = interaction.client.channels.cache.get(
+      cfg.defaultEventChannelId
+    );
+    if (candidate && candidate.isTextBased()) {
+      targetChannel = candidate;
+    }
   }
+
+  // Generate a simple eventId for RSVP tracking
+  const eventId =
+    crypto.randomUUID?.() ?? Math.random().toString(36).slice(2, 10);
+
+  const embed = new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(description)
+    .addFields(
+      {
+        name: "Time",
+        value: time,
+        inline: false,
+      },
+      {
+        name: `Spots (0/${maxSlots})`,
+        value: "—",
+        inline: false,
+      },
+      {
+        name: "Waitlist (0)",
+        value: "—",
+        inline: false,
+      }
+    )
+    .setFooter({ text: `Event ID: ${eventId}` })
+    .setTimestamp(new Date());
+
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`rsvp:yes:${eventId}`)
+      .setLabel("Yes")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`rsvp:no:${eventId}`)
+      .setLabel("No")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`rsvp:cancel:${eventId}`)
+      .setLabel("Cancel RSVP")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  const message = await targetChannel.send({
+    embeds: [embed],
+    components: [buttons],
+  });
+
+  // Register event in memory for RSVP handling
+  registerEvent(eventId, maxSlots);
+
+  // OPTIONAL: sync with your app backend
+  if (apiBase) {
+    try {
+      await axios.post(`${apiBase}/events`, {
+        eventId,
+        title,
+        time,
+        description,
+        maxSlots,
+        discordMessageId: message.id,
+        discordChannelId: message.channel.id,
+        guildId: message.guildId,
+      });
+    } catch (err) {
+      console.error("[EventNexus] Failed to sync event to API:", err.message);
+      // Not fatal to Discord flow
+    }
+  }
+
+  await interaction.editReply(
+    `✅ Event created and posted in ${targetChannel}.\nEvent ID: \`${eventId}\`, max slots: **${maxSlots}**.`
+  );
 }
