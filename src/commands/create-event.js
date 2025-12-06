@@ -7,6 +7,7 @@ import {
   ButtonStyle,
 } from "discord.js";
 import axios from "axios";
+import { getConfig } from "../utils/config.js";
 
 const apiBase = process.env.NEXUS_API_URL || null;
 const apiKey = process.env.BASE44_API_KEY || null;
@@ -37,9 +38,21 @@ function buildEventEmbed(state) {
     .addFields(
       { name: "🕒 Time", value: state.timeText, inline: false },
       { name: "🎯 Max slots", value: String(state.maxPlayers), inline: true },
-      { name: `✅ Yes (${state.yes.length}/${state.maxPlayers})`, value: yesList, inline: false },
-      { name: `📥 Waitlist (${state.waitlist.length})`, value: waitList, inline: false },
-      { name: `❌ No (${state.no.length})`, value: noList, inline: false }
+      {
+        name: `✅ Yes (${state.yes.length}/${state.maxPlayers})`,
+        value: yesList,
+        inline: false,
+      },
+      {
+        name: `📥 Waitlist (${state.waitlist.length})`,
+        value: waitList,
+        inline: false,
+      },
+      {
+        name: `❌ No (${state.no.length})`,
+        value: noList,
+        inline: false,
+      }
     )
     .setFooter({ text: `Created by ${state.createdByName}` })
     .setTimestamp();
@@ -69,6 +82,7 @@ function buildEventButtons(eventKey) {
 
 /**
  * Slash command definition
+ * NOTE: the option is called "capacity" here.
  */
 export const data = new SlashCommandBuilder()
   .setName("createevent")
@@ -77,14 +91,20 @@ export const data = new SlashCommandBuilder()
     opt.setName("title").setDescription("Event title").setRequired(true)
   )
   .addStringOption((opt) =>
-    opt.setName("time").setDescription("Event time (e.g. 2025-12-05 20:00 PST)").setRequired(true)
+    opt
+      .setName("time")
+      .setDescription("Event time (e.g. 2025-12-05 20:00 PST)")
+      .setRequired(true)
   )
   .addStringOption((opt) =>
-    opt.setName("description").setDescription("Short description").setRequired(false)
+    opt
+      .setName("description")
+      .setDescription("Short description")
+      .setRequired(false)
   )
   .addIntegerOption((opt) =>
     opt
-      .setName("max")
+      .setName("capacity")
       .setDescription("Max players (default 30)")
       .setRequired(false)
       .setMinValue(1)
@@ -92,20 +112,39 @@ export const data = new SlashCommandBuilder()
   );
 
 /**
- * Slash command handler
+ * /createevent handler
  */
 export async function execute(interaction) {
+  // Private receipt to you
   await interaction.deferReply({ ephemeral: true });
 
   const title = interaction.options.getString("title", true);
   const timeText = interaction.options.getString("time", true);
   const description = interaction.options.getString("description") || "";
-  const maxPlayers = interaction.options.getInteger("max") ?? 30;
+  const maxPlayers = interaction.options.getInteger("capacity") ?? 30;
 
-  // Sync to backend (optional)
+  // Decide which channel to post in:
+  // 1) defaultEventChannelId from config.json if valid
+  // 2) else the channel you ran the command in
+  const cfg = getConfig();
+  let targetChannel = interaction.channel;
+
+  if (cfg.defaultEventChannelId) {
+    const candidate = interaction.client.channels.cache.get(
+      cfg.defaultEventChannelId
+    );
+    if (candidate && candidate.isTextBased()) {
+      targetChannel = candidate;
+    }
+  }
+
+  // Sync to backend (Base44 / Event Nexus)
   let backendId = null;
+  let backendError = null;
 
-  if (apiBase) {
+  if (!apiBase) {
+    console.warn("NEXUS_API_URL not set; skipping backend event sync.");
+  } else {
     try {
       const payload = {
         title,
@@ -113,7 +152,7 @@ export async function execute(interaction) {
         description,
         maxPlayers,
         guildId: interaction.guildId,
-        channelId: interaction.channelId,
+        channelId: targetChannel.id,
         createdBy: interaction.user.id,
       };
 
@@ -125,12 +164,19 @@ export async function execute(interaction) {
       });
 
       backendId = res.data?.id || null;
-      console.log("Event synced to Nexus API:", backendId);
+      console.log("✅ Event synced to Nexus API:", backendId);
     } catch (err) {
-      console.error("Failed backend sync:", err.message);
+      const backend = err.response?.data;
+      backendError =
+        backend?.error ||
+        backend?.message ||
+        (typeof backend === "string" ? backend : null) ||
+        err.message;
+      console.error("❌ Failed to sync event to Nexus API:", backend || err);
     }
   }
 
+  // Local RSVP state
   const state = {
     backendId,
     title,
@@ -138,7 +184,7 @@ export async function execute(interaction) {
     description,
     maxPlayers,
     guildId: interaction.guildId,
-    channelId: interaction.channelId,
+    channelId: targetChannel.id,
     createdBy: interaction.user.id,
     createdByName: interaction.user.tag,
     yes: [],
@@ -147,24 +193,34 @@ export async function execute(interaction) {
   };
 
   const eventKey = backendId || `local-${Date.now()}`;
+
   const embed = buildEventEmbed(state);
   const row = buildEventButtons(eventKey);
 
-  const message = await interaction.followUp({
+  // 🔓 Public message in the event channel (NOT ephemeral)
+  const publicMessage = await targetChannel.send({
     embeds: [embed],
     components: [row],
-    fetchReply: true,
   });
 
-  state.messageId = message.id;
+  state.messageId = publicMessage.id;
   state.eventKey = eventKey;
+  eventState.set(publicMessage.id, state);
+  console.log("📌 Event tracked with message ID:", publicMessage.id);
 
-  eventState.set(message.id, state);
-  console.log("Event tracked:", message.id);
+  let replyText = `✅ Event created and posted in ${targetChannel}.\n(${publicMessage.url})`;
+  if (backendError) {
+    replyText += `\n⚠ But I couldn't sync it to Event Nexus: ${backendError}`;
+  }
+
+  await interaction.editReply({
+    content: replyText,
+  });
 }
 
 /**
  * Handle RSVP buttons: Yes / No / Cancel
+ * (wired from index.js via handleEventButton)
  */
 export async function handleEventButton(interaction) {
   const { customId, message, user } = interaction;
@@ -175,9 +231,10 @@ export async function handleEventButton(interaction) {
   const messageId = message.id;
   const state = eventState.get(messageId);
 
-  if (!state) {
+  if (!state || state.eventKey !== eventKey) {
     return interaction.reply({
-      content: "⚠ RSVP tracking reset. Event must be recreated.",
+      content:
+        "⚠ RSVP tracking for this event was reset. Ask staff to recreate the event.",
       ephemeral: true,
     });
   }
@@ -195,21 +252,24 @@ export async function handleEventButton(interaction) {
     } else {
       state.waitlist.push(userId);
     }
-  }
-
-  if (action === "no") {
+  } else if (action === "no") {
     state.no.push(userId);
+    // Free slot → promote from waitlist
     while (state.yes.length < state.maxPlayers && state.waitlist.length > 0) {
       const promoted = state.waitlist.shift();
       state.yes.push(promoted);
     }
-  }
-
-  if (action === "cancel") {
+  } else if (action === "cancel") {
+    // Just freed a spot → promote from waitlist if possible
     while (state.yes.length < state.maxPlayers && state.waitlist.length > 0) {
       const promoted = state.waitlist.shift();
       state.yes.push(promoted);
     }
+  } else {
+    return interaction.reply({
+      content: "❌ Unknown RSVP action.",
+      ephemeral: true,
+    });
   }
 
   const updatedEmbed = buildEventEmbed(state);
