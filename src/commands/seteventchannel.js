@@ -14,21 +14,49 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function execute(interaction) {
-  const channel = interaction.options.getChannel("channel", true);
+  try {
+    await interaction.deferReply({ ephemeral: true });
 
-  if (!channel.isTextBased()) {
-    return interaction.reply({
-      content: "❌ That channel cannot receive event posts. Choose a text/announcement channel.",
-      ephemeral: true,
-    });
+    const channel = interaction.options.getChannel("channel", true);
+
+    if (!channel.isTextBased()) {
+      return interaction.editReply(
+        "❌ That channel cannot receive event posts. Choose a text or announcement channel."
+      );
+    }
+
+    let updated;
+    try {
+      updated = setConfig({ defaultEventChannelId: channel.id });
+    } catch (err) {
+      console.error("[EventNexus] Failed to update config.json:", err);
+      return interaction.editReply(
+        "❌ I couldn't save the default channel (config write failed). Check the logs on Railway."
+      );
+    }
+
+    console.log("[EventNexus] Default event channel set to:", updated.defaultEventChannelId);
+
+    return interaction.editReply(
+      `✅ Default event channel set to ${channel} (\`${channel.id}\`).`
+    );
+  } catch (err) {
+    console.error("[EventNexus] Error in /seteventchannel handler:", err);
+
+    // Best effort to notify the user, but don't crash if this also fails
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(
+          "❌ Something went wrong while setting the default channel."
+        );
+      } else {
+        await interaction.reply({
+          content: "❌ Something went wrong while setting the default channel.",
+          ephemeral: true,
+        });
+      }
+    } catch (e) {
+      console.error("[EventNexus] Failed to send error response for /seteventchannel:", e);
+    }
   }
-
-  const updated = setConfig({ defaultEventChannelId: channel.id });
-
-  console.log("[EventNexus] Default event channel set to:", updated.defaultEventChannelId);
-
-  return interaction.reply({
-    content: `✅ Default event channel set to ${channel} (\`${channel.id}\`).`,
-    ephemeral: true,
-  });
 }
