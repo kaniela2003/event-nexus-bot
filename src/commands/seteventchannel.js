@@ -1,4 +1,3 @@
-// src/commands/seteventchannel.js
 import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import { setConfig } from "../utils/config.js";
 
@@ -17,11 +16,19 @@ export async function execute(interaction) {
   try {
     await interaction.deferReply({ ephemeral: true });
 
-    const channel = interaction.options.getChannel("channel", true);
+    // Don't throw if it's missing – handle it ourselves
+    const channel = interaction.options.getChannel("channel", false);
 
-    if (!channel || !channel.isTextBased()) {
+    if (!channel) {
       return interaction.editReply(
-        "❌ That channel cannot receive event posts. Choose a text/announcement channel."
+        "❌ You must choose a channel when using `/seteventchannel`.\n" +
+        "Try again and pick a text channel from the menu."
+      );
+    }
+
+    if (!channel.isTextBased()) {
+      return interaction.editReply(
+        "❌ That channel cannot receive event posts. Choose a text or announcement channel."
       );
     }
 
