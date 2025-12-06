@@ -1,39 +1,71 @@
+// src/commands.js
 import { REST, Routes } from "discord.js";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import config from "../config.json" assert { type: "json" };
 
-// Load all commands from /src/commands folder
-export async function loadCommands(client) {
-  const commandsPath = path.resolve("src/commands");
-  const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-  client.commands = new Map();
+/**
+ * Load all command modules from ./commands
+ * Each file must export:
+ *   export const data = new SlashCommandBuilder()...
+ *   export async function execute(interaction) { ... }
+ */
+export async function loadCommands() {
+  const commands = new Map();
 
-  for (const file of files) {
-    const command = await import(`./commands/${file}`);
-    if (command.data && command.execute) {
-      client.commands.set(command.data.name, command);
+  const commandsPath = path.join(__dirname, "commands");
+  const commandFiles = fs
+    .readdirSync(commandsPath)
+    .filter((file) => file.endsWith(".js"));
+
+  for (const file of commandFiles) {
+    const filePath = path.join(commandsPath, file);
+
+    const commandModule = await import(filePath);
+    const data = commandModule.data;
+    const execute = commandModule.execute;
+
+    if (!data || !execute) {
+      console.warn(
+        ⚠️ Skipping command file ${file} (missing data or execute export)`
+      );
+      continue;
     }
+
+    commands.set(data.name, { data, execute });
   }
 
-  console.log(`⚡ Loaded ${client.commands.size} commands.`);
+  console.log(`⚡ Loaded ${commands.size} commands.`);
+  return commands;
 }
 
-// Register slash commands globally
-export async function registerGlobalCommands(clientId, token) {
-  const commandsPath = path.resolve("src/commands");
-  const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
+/**
+ * Register commands for a single guild (fast updates)
+ * Uses clientId + guildId from config.json
+ */
+export async function registerGlobalCommands(commands) {
+  const rest = new REST({ version: "10" }).setToken(
+    process.env.DISCORD_BOT_TOKEN
+  );
 
-  const body = [];
+  // Turn command data into raw JSON for Discord API
+  const body = [...commands.values()].map((c) => c.data.toJSON());
 
-  for (const file of files) {
-    const command = await import(`./commands/${file}`);
-    if (command.data) body.push(command.data.toJSON());
+  try {
+    console.log("🔃 Registering guild slash commands...");
+
+    await rest.put(
+      Routes.applicationGuildCommands(config.clientId, config.guildId),
+      { body }
+    );
+
+    console.log(`✅ Registered ${body.length} guild slash commands.`);
+  } catch (err) {
+    console.error("❌ Failed to register slash commands:", err);
+    throw err;
   }
-
-  const rest = new REST({ version: "10" }).setToken(token);
-
-  await rest.put(Routes.applicationCommands(clientId), { body });
-
-  console.log("✅ Global slash commands synced to Discord.");
 }
