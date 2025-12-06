@@ -33,9 +33,11 @@ export async function execute(interaction) {
   const description = interaction.options.getString("description") ?? "";
   const capacity = interaction.options.getInteger("capacity") ?? null;
 
+  // Private “receipt” for you
   await interaction.deferReply({ ephemeral: true });
 
   try {
+    // Create event in Nexus backend
     const event = await createNexusEvent({
       title,
       time: timeInput,
@@ -46,8 +48,9 @@ export async function execute(interaction) {
       createdBy: interaction.user.id,
     });
 
+    // Build the public embed
     const embed = new EmbedBuilder()
-      .setTitle(`✅ Event created: ${title}`)
+      .setTitle(title)
       .setDescription(description || "No description provided.")
       .addFields(
         { name: "Time", value: timeInput, inline: true },
@@ -57,23 +60,33 @@ export async function execute(interaction) {
           inline: true,
         },
         {
+          name: "Created By",
+          value: `<@${interaction.user.id}>`,
+          inline: true,
+        },
+        {
           name: "Event ID",
           value: event?.id ? String(event.id) : "N/A",
           inline: true,
         }
       )
-      .setFooter({ text: "Synced with Event Nexus backend" })
+      .setFooter({ text: "Synced with Event Nexus" })
       .setTimestamp(new Date());
 
-    await interaction.editReply({
-      content: "Event has been created and synced to Nexus.",
+    // 🔓 Public message in the channel
+    const publicMessage = await interaction.channel.send({
       embeds: [embed],
+    });
+
+    // Optional: show the link to the public post in your private reply
+    await interaction.editReply({
+      content: `✅ Event created and posted: ${publicMessage.url}`,
+      embeds: [],
     });
   } catch (err) {
     const backend = err.response?.data;
     console.error("Error syncing event to Nexus:", backend || err);
 
-    // Try to surface the real error from Base44
     const detail =
       backend?.error ||
       backend?.message ||
