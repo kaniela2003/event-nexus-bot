@@ -1,8 +1,8 @@
 // src/commands.js
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { REST, Routes, Collection } from "discord.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { REST, Routes } from "discord.js";
 import { getConfig } from "./utils/config.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,7 +25,10 @@ export async function loadCommands() {
   for (const file of commandFiles) {
     const filePath = path.join(commandsPath, file);
 
-    const commandModule = await import(filePath);
+    // Convert Windows path -> file:// URL for ESM dynamic import
+    const fileUrl = pathToFileURL(filePath).href;
+    const commandModule = await import(fileUrl);
+
     const data = commandModule.data;
     const execute = commandModule.execute;
 
