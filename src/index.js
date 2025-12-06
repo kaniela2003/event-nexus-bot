@@ -19,39 +19,36 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// Use the standard 'ready' event for discord.js v14
+// Standard ready event
 client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// Handle slash command interactions
+// Slash command handler
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const command = interaction.client.commands?.get(interaction.commandName);
+  const command = client.commands.get(interaction.commandName);
+
   if (!command) {
-    console.warn(`⚠️ No command handler found for /${interaction.commandName}`);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "⚠️ That command is not wired up correctly.",
-        ephemeral: true,
-      });
-    }
-    return;
+    return interaction.reply({
+      content: "⚠️ Command not wired correctly.",
+      ephemeral: true,
+    });
   }
 
   try {
     await command.execute(interaction);
-  } catch (error) {
-    console.error(`💥 Error running /${interaction.commandName}:`, error);
+  } catch (err) {
+    console.error(`💥 Error running /${interaction.commandName}:`, err);
 
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({
-        content: "⚠️ Something went wrong while executing that command.",
+        content: "⚠️ Something went wrong while executing.",
       });
     } else {
       await interaction.reply({
-        content: "⚠️ Something went wrong while executing that command.",
+        content: "⚠️ Something went wrong while executing.",
         ephemeral: true,
       });
     }
@@ -59,12 +56,12 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 (async () => {
-  // Load command modules into client.commands
-  await loadCommands(client);
+  // 🔥 FIX: assign loaded commands into client.commands
+  client.commands = await loadCommands(client);
 
-  // Register global slash commands with Discord
-  await registerGlobalCommands(clientId, token);
+  // Register guild commands
+  await registerGlobalCommands(client.commands);
 
-  // Log in the bot
+  // Login the bot
   await client.login(token);
 })();
