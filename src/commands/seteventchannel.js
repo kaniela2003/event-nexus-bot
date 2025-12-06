@@ -5,43 +5,42 @@ import { setConfig } from "../utils/config.js";
 export const data = new SlashCommandBuilder()
   .setName("seteventchannel")
   .setDescription("Set the default channel for Event Nexus event announcements.")
-  .setDefaultSubject("SetEventChannel")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption((opt) =>
     opt
       .setName("channel")
       .setDescription("Channel where Event Nexus will post events.")
       .setRequired(true)
-  )
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+  );
 
-export async function execute(interactor) {
+export async function execute(interaction) {
   try {
-    await interactor.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
 
-    const chosenChannel = interactor.options.getChannel("channel", true);
+    const channel = interaction.options.getChannel("channel", true);
 
-    if (!chosenChannel || !chosenChannel.isTextBased()) {
-      return interactor.editReply(
-        "❌ That channel cannot receive event posts. Choose a text or announcement channel."
+    if (!channel || !channel.isTextBased()) {
+      return interaction.editReply(
+        "❌ That channel cannot receive event posts. Choose a text/announcement channel."
       );
     }
 
-    const updated = setConfig({ defaultEventChannelId: chosenChannel.id });
+    const updated = setConfig({ defaultEventChannelId: channel.id });
     console.log("[EventNexus] Default event channel set to:", updated.defaultEventChannelId);
 
-    return interactor.editReply(
-      `✅ Default event channel set to ${chosenChannel} (\`${chosenChannel.id}\`).`
+    return interaction.editReply(
+      `✅ Default event channel set to ${channel} (\`${channel.id}\`).`
     );
   } catch (err) {
-    console.error("[EventNexus] Error in /seteventchannel handler:", err);
+    console.error("[EventNexus] Error in /seteventchannel:", err);
 
     try {
-      if (interactor.deferred || interactor.replied) {
-        await interactor.editReply(
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(
           "❌ Something went wrong while setting the default channel."
         );
       } else {
-        await interactor.reply({
+        await interaction.reply({
           content: "❌ Something went wrong while setting the default channel.",
           ephemeral: true,
         });

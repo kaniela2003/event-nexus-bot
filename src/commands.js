@@ -52,13 +52,18 @@ export async function registerGlobalCommands(commands) {
     process.env.DISCORD_BOT_TOKEN
   );
 
-  // Turn command data into raw JSON for Discord API
   const body = [...commands.values()].map((c) => c.data.toJSON());
 
   try {
     console.log("🔃 Registering guild slash commands...");
 
     const cfg = getConfig();
+
+    if (!cfg.clientId || !cfg.guildId) {
+      throw new Error(
+        `Missing clientId or guildId in config.json. Got: clientId=${cfg.clientId}, guildId=${cfg.guildId}`
+      );
+    }
 
     await rest.put(
       Routes.applicationGuildCommands(cfg.clientId, cfg.guildId),

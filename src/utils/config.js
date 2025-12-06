@@ -6,39 +6,47 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Static config (committed)
-const baseConfigPath = path.join(__dirname, "..", "..", "config.json");
+// We read/write this file: <project-root>/config.json
+const configPath = path.join(__dirname, "..", "..", "config.json");
 
-// Runtime config (must exist in repo)
-const runtimeConfigPath = path.join(__dirname, "..", "..", ".runtime-config.json");
+// Simple in-memory cache so config survives even if disk writes fail
+let cachedConfig = null;
 
-function readJson(filePath) {
+function loadFromDisk() {
   try {
-    if (!fs.existsSync(filePath)) return null;
-    const raw = fs.readFileSync(filePath, "utf8");
+    const raw = fs.readFileSync(configPath, "utf8");
     return JSON.parse(raw);
   } catch (err) {
-    console.warn("[EventNexus] Failed to read JSON", filePath, ":", err.message);
-    return null;
+    console.warn(
+      "[EventNexus] config.json missing or unreadable, using empty config:",
+      err.message
+    );
+    return {};
   }
 }
 
 export function getConfig() {
-  const base = readJson(baseConfigPath) ?? {};
-  const runtime = readJson(runtimeConfigPath) ?? {};
-
-  return { ...base, ...runtime };
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+  cachedConfig = loadFromDisk();
+  return cachedConfig;
 }
 
 export function setConfig(partial) {
   const current = getConfig();
   const updated = { ...current, ...partial };
+  cachedConfig = updated;
 
   try {
-    fs.writeFileSync(runtimeConfigPath, JSON.stringify(updated, null, 2), "utf8");
-    console.log("[EventNexus] Updated runtime config at", runtimeConfigPath);
+    fs.writeFileSync(configPath, JSON.stringify(updated, null, 2), "utf8");
+    console.log("[EventNexus] config.json updated at", configPath);
   } catch (err) {
-    console.error("[EventNexus] Failed to write runtime config:", err.message);
+    console.error(
+      "[EventNexus] Failed to write config.json (using in-memory only):",
+      err.message
+    );
+    // We still keep cachedConfig in memory so it works until restart
   }
 
   return updated;

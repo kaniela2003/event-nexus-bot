@@ -1,5 +1,7 @@
 {
   "clientId": "1445642848589451355",
   "guildId": "1095531938405683231",
-  "ownerId": "649488357235359744"
+  "ownerId": "649488357235359744",
+  "defaultEventChannelId": null
+  
 }
