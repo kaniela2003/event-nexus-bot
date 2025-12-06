@@ -2,8 +2,7 @@
 import { SlashCommandBuilder } from "discord.js";
 import axios from "axios";
 
-const base = process.env.NEXUS_API_URL; 
-// NEXUS_API_URL should already be: https://eventnexus.base44.app/functions/api
+const base = process.env.NEXUS_API_URL;
 
 export const data = new SlashCommandBuilder()
   .setName("seteventchannel")
@@ -17,12 +16,13 @@ export async function execute(interaction) {
     });
   }
 
+  // Only ONE response chain:
+  await interaction.deferReply({ ephemeral: true });
+
   const guildId = interaction.guildId;
   const eventChannelId = interaction.channelId;
 
   try {
-    await interaction.deferReply({ ephemeral: true });
-
     await axios.post(
       `${base.replace(/\/+$/, "")}/guild-settings`,
       {
@@ -35,20 +35,19 @@ export async function execute(interaction) {
       }
     );
 
-    await interaction.editReply({
-      content: `✅ This channel (<#${eventChannelId}>) is now set as the default Event Nexus announcement channel for this server.`,
-    });
+    // SINGLE final reply → no duplicate responses
+    await interaction.editReply(
+      `✅ This channel (<#${eventChannelId}>) is now set as the Event Nexus announcement channel for this server.`
+    );
   } catch (err) {
-    console.error("Error saving guild settings:", err.response?.data || err.message);
-
     const detail =
       err.response?.data?.error ||
       err.response?.data?.message ||
       err.message ||
       "Unknown error";
 
-    await interaction.editReply({
-      content: `⚠ I couldn't save this channel as the event channel.\n> ${detail}`,
-    });
+    await interaction.editReply(
+      `⚠ I couldn't save this channel as the event channel.\n> ${detail}`
+    );
   }
 }
