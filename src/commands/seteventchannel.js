@@ -5,58 +5,52 @@ import { setConfig } from "../utils/config.js";
 export const data = new SlashCommandBuilder()
   .setName("seteventchannel")
   .setDescription("Set the default channel for Event Nexus event announcements.")
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addChannelOption(opt =>
+  .setDefaultSubject("SetEventChannel")
+  .addChannelOption((opt) =>
     opt
       .setName("channel")
       .setDescription("Channel where Event Nexus will post events.")
       .setRequired(true)
-  );
+  )
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
-export async function execute(interaction) {
+export async function execute(interactor) {
   try {
-    await interaction.deferReply({ ephemeral: true });
+    await interactor.deferReply({ ephemeral: true });
 
-    const channel = interaction.options.getChannel("channel", true);
+    const chosenChannel = interactor.options.getChannel("channel", true);
 
-    if (!channel.isTextBased()) {
-      return interaction.editReply(
+    if (!chosenChannel || !chosenChannel.isTextBased()) {
+      return interactor.editReply(
         "❌ That channel cannot receive event posts. Choose a text or announcement channel."
       );
     }
 
-    let updated;
-    try {
-      updated = setConfig({ defaultEventChannelId: channel.id });
-    } catch (err) {
-      console.error("[EventNexus] Failed to update config.json:", err);
-      return interaction.editReply(
-        "❌ I couldn't save the default channel (config write failed). Check the logs on Railway."
-      );
-    }
-
+    const updated = setConfig({ defaultEventChannelId: chosenChannel.id });
     console.log("[EventNexus] Default event channel set to:", updated.defaultEventChannelId);
 
-    return interaction.editReply(
-      `✅ Default event channel set to ${channel} (\`${channel.id}\`).`
+    return interactor.editReply(
+      `✅ Default event channel set to ${chosenChannel} (\`${chosenChannel.id}\`).`
     );
   } catch (err) {
     console.error("[EventNexus] Error in /seteventchannel handler:", err);
 
-    // Best effort to notify the user, but don't crash if this also fails
     try {
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(
+      if (interactor.deferred || interactor.replied) {
+        await interactor.editReply(
           "❌ Something went wrong while setting the default channel."
         );
       } else {
-        await interaction.reply({
+        await interactor.reply({
           content: "❌ Something went wrong while setting the default channel.",
           ephemeral: true,
         });
       }
-    } catch (e) {
-      console.error("[EventNexus] Failed to send error response for /seteventchannel:", e);
+    } catch (replyErr) {
+      console.error(
+        "[EventNexus] Failed to send error response for /seteventchannel:",
+        replyErr
+      );
     }
   }
 }

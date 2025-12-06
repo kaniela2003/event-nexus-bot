@@ -4,21 +4,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "os";
 
-const __filename = fileURLToPath(__dirname + "/dummy").replace(/dummy$/, "");
-const __dirname_resolved = path.dirname(__filename);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Base config shipped with the app (read-only in production)
-const rootConfigPath = path.join(__dirname_resolved, "..", "..", "config.json");
+// Assumes: <project-root>/config.json
+const rootConfigPath = path.join(__dirname, "..", "..", "config.json");
+
 // Runtime override (safe to write, especially on Railway)
+// On Railway this will be something like /tmp/event-nexus-config.json
 const runtimeConfigPath = path.join(os.tmpdir(), "event-nexus-config.json");
 
-function readJson(p) {
+function readJson(filePath) {
   try {
-    if (!fs.existsSync(p)) return null;
-    const raw = fs.readFileSync(p, "utf8");
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, "utf8");
     return JSON.parse(raw);
   } catch (err) {
-    console.warn("[EventNexus] Failed to read JSON from", p, ":", err.message);
+    console.warn("[EventNexus] Failed to read JSON from", filePath, ":", err.message);
     return null;
   }
 }
