@@ -1,10 +1,14 @@
 // src/index.js
 import "dotenv/config";
+import http from "node:http";
+import { WebSocketServer } from "ws";
 import { Client, GatewayIntentBits, Collection } from "discord.js";
 import { loadCommands, registerGlobalCommands } from "./commands.js";
 import { handleEventButton } from "./commands/create-event.js";
 
-// Create Discord client
+// ----------------------------------------
+// Discord client
+// ----------------------------------------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -13,10 +17,66 @@ const client = new Client({
   ],
 });
 
-// Will hold all slash commands keyed by name
 client.commands = new Collection();
 
-async function init() {
+// ----------------------------------------
+// WebSocket setup
+// ----------------------------------------
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer((req, res) => {
+  // Simple health check for Railway / browser
+  if (req.url === "/" || req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, service: "Event Nexus WS" }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+
+const wss = new WebSocketServer({ server });
+
+/**
+ * Keep track of connected WebSocket clients
+ */
+const wsClients = new Set();
+
+wss.on("connection", (socket) => {
+  console.log("🌐 WebSocket client connected");
+  wsClients.add(socket);
+
+  socket.on("close", () => {
+    console.log("🌐 WebSocket client disconnected");
+    wsClients.delete(socket);
+  });
+
+  socket.on("error", (err) => {
+    console.error("🌐 WebSocket error:", err);
+  });
+
+  // Optional: handle inbound messages from app if needed later
+  socket.on("message", (data) => {
+    console.log("🌐 Received from client:", data.toString());
+  });
+});
+
+/**
+ * Helper to broadcast JSON to all WS clients
+ */
+export function broadcastToApp(payload) {
+  const data = JSON.stringify(payload);
+  for (const socket of wsClients) {
+    if (socket.readyState === socket.OPEN) {
+      socket.send(data);
+    }
+  }
+}
+
+// ----------------------------------------
+// Init Discord bot
+// ----------------------------------------
+async function initBot() {
   try {
     console.log("🔍 Loading commands...");
     const commands = await loadCommands();
@@ -28,7 +88,7 @@ async function init() {
     console.log("📦 Registering guild slash commands...");
     await registerGlobalCommands(commands);
 
-    console.log("🤖 Event Nexus bot is fully online.");
+    console.log("🤖 Event Nexus bot ready.");
   } catch (err) {
     console.error("❌ Failed to initialize bot:", err);
   }
@@ -41,7 +101,6 @@ client.once("ready", () => {
 // Handle slash commands + RSVP buttons
 client.on("interactionCreate", async (interaction) => {
   try {
-    // Slash commands
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
       if (!command) {
@@ -53,7 +112,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Event RSVP buttons (Yes / No / Cancel)
     if (interaction.isButton()) {
       await handleEventButton(interaction);
       return;
@@ -70,5 +128,10 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// Boot the bot
-init();
+// ----------------------------------------
+// Start HTTP+WS server + bot
+// ----------------------------------------
+server.listen(PORT, () => {
+  console.log(`🌐 WebSocket/HTTP server listening on port ${PORT}`);
+  initBot();
+});

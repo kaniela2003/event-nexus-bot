@@ -9,84 +9,81 @@ import {
 import axios from "axios";
 import { getConfig } from "../utils/config.js";
 
-const apiBase = process.env.NEXUS_API_URL || null;
-const apiKey = process.env.BASE44_API_KEY || null;
-
-// In-memory RSVP state, keyed by Discord message ID
-// This resets if the bot restarts.
-const eventState = new Map();
+// In-memory state: messageId -> event state
+const eventStates = new Map();
 
 /**
- * Build the event embed from state.
+ * Build the embed from current state
  */
 function buildEventEmbed(state) {
-  const yesList = state.yes.length
-    ? state.yes.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n")
-    : "None";
+  const { max, yes, no, waitlist, meta } = state;
+  const { title, time, description, hostTag, backendId } = meta;
 
-  const waitList = state.waitlist.length
-    ? state.waitlist.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n")
-    : "None";
+  const yesList =
+    yes.size > 0 ? [...yes].map((id) => `<@${id}>`).join(", ") : "—";
+  const waitListText =
+    waitlist.size > 0 ? [...waitlist].map((id) => `<@${id}>`).join(", ") : "—";
+  const noList =
+    no.size > 0 ? [...no].map((id) => `<@${id}>`).join(", ") : "—";
 
-  const noList = state.no.length
-    ? state.no.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n")
-    : "None";
+  let desc =
+    `**Time:** ${time}\n` +
+    `**Max players:** ${max}\n` +
+    `**Host:** ${hostTag}\n\n` +
+    `**Yes (${yes.size}/${max}):** ${yesList}\n` +
+    `**Waitlist (${waitlist.size}):** ${waitListText}\n` +
+    `**No (${no.size}):** ${noList}`;
 
-  return new EmbedBuilder()
-    .setTitle(`🎮 ${state.title}`)
-    .setDescription(state.description || "No description provided.")
-    .addFields(
-      { name: "🕒 Time", value: state.timeText, inline: false },
-      { name: "🎯 Max slots", value: String(state.maxPlayers), inline: true },
-      {
-        name: `✅ Yes (${state.yes.length}/${state.maxPlayers})`,
-        value: yesList,
-        inline: false,
-      },
-      {
-        name: `📥 Waitlist (${state.waitlist.length})`,
-        value: waitList,
-        inline: false,
-      },
-      {
-        name: `❌ No (${state.no.length})`,
-        value: noList,
-        inline: false,
-      }
-    )
-    .setFooter({ text: `Created by ${state.createdByName}` })
-    .setTimestamp();
+  const embed = new EmbedBuilder()
+    .setTitle(`🎮 ${title}`)
+    .setDescription(desc)
+    .setColor(0x00aeff)
+    .setTimestamp(new Date());
+
+  const fields = [];
+
+  if (description) {
+    fields.push({
+      name: "Description",
+      value: description,
+    });
+  }
+
+  fields.push({
+    name: "Synced to App",
+    value: backendId ? `✅ ID: \`${backendId}\`` : "⚠️ Not synced",
+  });
+
+  if (fields.length > 0) {
+    embed.addFields(fields);
+  }
+
+  return embed;
 }
 
 /**
- * Build Yes / No / Cancel buttons.
+ * Build the RSVP buttons
  */
-function buildEventButtons(eventKey) {
+function buildEventButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`event:${eventKey}:yes`)
-      .setLabel("✅ Yes")
+      .setCustomId("event_yes")
+      .setLabel("Yes")
       .setStyle(ButtonStyle.Success),
-
     new ButtonBuilder()
-      .setCustomId(`event:${eventKey}:no`)
-      .setLabel("❌ No")
+      .setCustomId("event_no")
+      .setLabel("No")
       .setStyle(ButtonStyle.Danger),
-
     new ButtonBuilder()
-      .setCustomId(`event:${eventKey}:cancel`)
-      .setLabel("🗑 Cancel RSVP")
+      .setCustomId("event_cancel")
+      .setLabel("Cancel RSVP")
       .setStyle(ButtonStyle.Secondary)
   );
 }
 
-/**
- * Slash command definition
- * NOTE: the option is called "capacity" here.
- */
 export const data = new SlashCommandBuilder()
   .setName("createevent")
-  .setDescription("Create a new GTA Online event.")
+  .setDescription("Create a new GTA Online event with RSVP + waitlist.")
   .addStringOption((opt) =>
     opt.setName("title").setDescription("Event title").setRequired(true)
   )
@@ -96,188 +93,210 @@ export const data = new SlashCommandBuilder()
       .setDescription("Event time (e.g. 2025-12-05 20:00 PST)")
       .setRequired(true)
   )
-  .addStringOption((opt) =>
-    opt
-      .setName("description")
-      .setDescription("Short description")
-      .setRequired(false)
-  )
+  // 🔴 FIX: capacity (required) must come BEFORE any optional options
   .addIntegerOption((opt) =>
     opt
       .setName("capacity")
-      .setDescription("Max players (default 30)")
-      .setRequired(false)
+      .setDescription("Max players for this event")
+      .setRequired(true)
       .setMinValue(1)
-      .setMaxValue(100)
+  )
+  .addStringOption((opt) =>
+    opt
+      .setName("description")
+      .setDescription("Short description of the event")
+      .setRequired(false)
   );
 
 /**
- * /createevent handler
+ * Slash command: /createevent
  */
 export async function execute(interaction) {
-  // Private receipt to you
-  await interaction.deferReply({ ephemeral: true });
+  const { options, guild } = interaction;
 
-  const title = interaction.options.getString("title", true);
-  const timeText = interaction.options.getString("time", true);
-  const description = interaction.options.getString("description") || "";
-  const maxPlayers = interaction.options.getInteger("capacity") ?? 30;
+  const title = options.getString("title", true);
+  const time = options.getString("time", true);
+  const description = options.getString("description") || "";
+  const capacity = options.getInteger("capacity", true);
 
-  // Decide which channel to post in:
-  // 1) defaultEventChannelId from config.json if valid
-  // 2) else the channel you ran the command in
-  const cfg = getConfig();
+  // Pick channel: saved event channel or current
   let targetChannel = interaction.channel;
-
-  if (cfg.defaultEventChannelId) {
-    const candidate = interaction.client.channels.cache.get(
-      cfg.defaultEventChannelId
-    );
-    if (candidate && candidate.isTextBased()) {
-      targetChannel = candidate;
+  try {
+    const cfg = getConfig();
+    if (cfg?.eventChannelId && guild) {
+      const maybeChannel = guild.channels.cache.get(cfg.eventChannelId);
+      if (maybeChannel) {
+        targetChannel = maybeChannel;
+      }
     }
+  } catch (err) {
+    console.warn("⚠️ Failed to read config for event channel:", err.message);
   }
 
-  // Sync to backend (Base44 / Event Nexus)
-  let backendId = null;
-  let backendError = null;
+  await interaction.deferReply({ ephemeral: true });
 
-  if (!apiBase) {
-    console.warn("NEXUS_API_URL not set; skipping backend event sync.");
-  } else {
+  // Try to sync to Base44 (but don't fail the command if this errors)
+  let backendId = null;
+  const base = process.env.NEXUS_API_URL;
+
+  if (base) {
     try {
       const payload = {
         title,
-        time: timeText,
+        time,
         description,
-        maxPlayers,
-        guildId: interaction.guildId,
+        maxPlayers: capacity,
+        guildId: guild?.id ?? null,
         channelId: targetChannel.id,
         createdBy: interaction.user.id,
       };
 
-      const res = await axios.post(`${apiBase}/events`, payload, {
-        headers: {
-          "Content-Type": "application/json",
-          ...(apiKey ? { "x-api-key": apiKey } : {}),
-        },
-      });
-
-      backendId = res.data?.id || null;
-      console.log("✅ Event synced to Nexus API:", backendId);
+      const res = await axios.post(`${base}/events`, payload);
+      backendId = res?.data?.id ?? null;
+      console.log("✅ Synced event to Nexus:", res.status, res.data);
     } catch (err) {
-      const backend = err.response?.data;
-      backendError =
-        backend?.error ||
-        backend?.message ||
-        (typeof backend === "string" ? backend : null) ||
-        err.message;
-      console.error("❌ Failed to sync event to Nexus API:", backend || err);
+      console.error("❌ Failed to sync event to Nexus:", err.message);
     }
+  } else {
+    console.warn("⚠️ NEXUS_API_URL not set; skipping backend sync.");
   }
 
-  // Local RSVP state
   const state = {
-    backendId,
-    title,
-    timeText,
-    description,
-    maxPlayers,
-    guildId: interaction.guildId,
-    channelId: targetChannel.id,
-    createdBy: interaction.user.id,
-    createdByName: interaction.user.tag,
-    yes: [],
-    waitlist: [],
-    no: [],
+    max: capacity,
+    yes: new Set(),
+    no: new Set(),
+    waitlist: new Set(),
+    meta: {
+      title,
+      time,
+      description,
+      hostTag: interaction.user.tag,
+      createdById: interaction.user.id,
+      backendId,
+    },
   };
 
-  const eventKey = backendId || `local-${Date.now()}`;
-
   const embed = buildEventEmbed(state);
-  const row = buildEventButtons(eventKey);
+  const buttons = buildEventButtons();
 
-  // 🔓 Public message in the event channel (NOT ephemeral)
-  const publicMessage = await targetChannel.send({
+  const message = await targetChannel.send({
     embeds: [embed],
-    components: [row],
+    components: [buttons],
   });
 
-  state.messageId = publicMessage.id;
-  state.eventKey = eventKey;
-  eventState.set(publicMessage.id, state);
-  console.log("📌 Event tracked with message ID:", publicMessage.id);
-
-  let replyText = `✅ Event created and posted in ${targetChannel}.\n(${publicMessage.url})`;
-  if (backendError) {
-    replyText += `\n⚠ But I couldn't sync it to Event Nexus: ${backendError}`;
-  }
+  // Save state by message ID
+  eventStates.set(message.id, state);
 
   await interaction.editReply({
-    content: replyText,
+    content: `✅ Event created in <#${message.channel.id}> with capacity **${capacity}**.`,
   });
 }
 
 /**
- * Handle RSVP buttons: Yes / No / Cancel
- * (wired from index.js via handleEventButton)
+ * Handle button interactions for Yes / No / Cancel RSVP
  */
 export async function handleEventButton(interaction) {
-  const { customId, message, user } = interaction;
-  const [prefix, eventKey, action] = customId.split(":");
+  if (!interaction.isButton()) return;
 
-  if (prefix !== "event") return;
+  const messageId = interaction.message.id;
+  const state = eventStates.get(messageId);
 
-  const messageId = message.id;
-  const state = eventState.get(messageId);
-
-  if (!state || state.eventKey !== eventKey) {
-    return interaction.reply({
-      content:
-        "⚠ RSVP tracking for this event was reset. Ask staff to recreate the event.",
+  if (!state) {
+    await interaction.reply({
+      content: "⚠️ This event is no longer active in memory.",
       ephemeral: true,
     });
+    return;
   }
 
-  const userId = user.id;
+  const userId = interaction.user.id;
+  const customId = interaction.customId;
+  const { max, yes, no, waitlist } = state;
 
-  // Remove user from all lists first
-  state.yes = state.yes.filter((id) => id !== userId);
-  state.no = state.no.filter((id) => id !== userId);
-  state.waitlist = state.waitlist.filter((id) => id !== userId);
+  let replyText = "";
 
-  if (action === "yes") {
-    if (state.yes.length < state.maxPlayers) {
-      state.yes.push(userId);
+  const removeFromAll = () => {
+    yes.delete(userId);
+    no.delete(userId);
+    waitlist.delete(userId);
+  };
+
+  const promoteFromWaitlist = () => {
+    if (yes.size >= max || waitlist.size === 0) return null;
+    const nextId = waitlist.values().next().value;
+    if (!nextId) return null;
+    waitlist.delete(nextId);
+    yes.add(nextId);
+    return nextId;
+  };
+
+  if (customId === "event_yes") {
+    if (yes.has(userId)) {
+      replyText = "✅ You’re already marked as **Yes** for this event.";
     } else {
-      state.waitlist.push(userId);
+      // Remove from "no" or waitlist if previously there
+      no.delete(userId);
+      waitlist.delete(userId);
+
+      if (yes.size < max) {
+        yes.add(userId);
+        replyText = "✅ You’re in for this event.";
+      } else {
+        waitlist.add(userId);
+        replyText =
+          "⏳ Event is full — you’ve been added to the **waitlist**.";
+      }
     }
-  } else if (action === "no") {
-    state.no.push(userId);
-    // Free slot → promote from waitlist
-    while (state.yes.length < state.maxPlayers && state.waitlist.length > 0) {
-      const promoted = state.waitlist.shift();
-      state.yes.push(promoted);
+  } else if (customId === "event_no") {
+    const wasInYes = yes.has(userId);
+    const wasInWait = waitlist.has(userId);
+
+    removeFromAll();
+    no.add(userId);
+
+    let promoted = null;
+    if (wasInYes) {
+      promoted = promoteFromWaitlist();
     }
-  } else if (action === "cancel") {
-    // Just freed a spot → promote from waitlist if possible
-    while (state.yes.length < state.maxPlayers && state.waitlist.length > 0) {
-      const promoted = state.waitlist.shift();
-      state.yes.push(promoted);
+
+    if (promoted) {
+      replyText = `❌ You’re marked as **No**. <@${promoted}> was moved from waitlist into the event.`;
+    } else if (wasInYes || wasInWait) {
+      replyText = "❌ You’re marked as **No** and removed from the event.";
+    } else {
+      replyText = "❌ You’re marked as **No** for this event.";
+    }
+  } else if (customId === "event_cancel") {
+    const wasInYes = yes.has(userId);
+    const wasInWait = waitlist.has(userId);
+
+    if (!wasInYes && !wasInWait) {
+      replyText = "ℹ️ You don’t have an active RSVP to cancel.";
+    } else {
+      removeFromAll();
+      const promoted = promoteFromWaitlist();
+      if (promoted) {
+        replyText = `🔁 Your RSVP was canceled. <@${promoted}> was moved from waitlist into the event.`;
+      } else {
+        replyText = "🔁 Your RSVP was canceled and your spot is now open.";
+      }
     }
   } else {
-    return interaction.reply({
-      content: "❌ Unknown RSVP action.",
-      ephemeral: true,
-    });
+    // Not one of our buttons
+    return;
   }
 
+  // Rebuild embed and update message
   const updatedEmbed = buildEventEmbed(state);
+  const buttons = buildEventButtons();
 
-  await interaction.update({
+  await interaction.message.edit({
     embeds: [updatedEmbed],
-    components: message.components,
+    components: [buttons],
   });
 
-  eventState.set(messageId, state);
+  await interaction.reply({
+    content: replyText,
+    ephemeral: true,
+  });
 }
