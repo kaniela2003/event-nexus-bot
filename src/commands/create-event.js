@@ -6,8 +6,8 @@ import {
   ButtonBuilder,
   ButtonStyle,
 } from "discord.js";
-import axios from "axios";
 import { getConfig } from "../utils/config.js";
+import { createNexusEvent } from "../utils/api.js";
 
 // In-memory state: messageId -> event state
 const eventStates = new Map();
@@ -93,7 +93,7 @@ export const data = new SlashCommandBuilder()
       .setDescription("Event time (e.g. 2025-12-05 20:00 PST)")
       .setRequired(true)
   )
-  // 🔴 FIX: capacity (required) must come BEFORE any optional options
+  // required BEFORE any optional
   .addIntegerOption((opt) =>
     opt
       .setName("capacity")
@@ -135,30 +135,30 @@ export async function execute(interaction) {
 
   await interaction.deferReply({ ephemeral: true });
 
-  // Try to sync to Base44 (but don't fail the command if this errors)
+  // Sync to Base44 via shared helper
   let backendId = null;
-  const base = process.env.NEXUS_API_URL;
 
-  if (base) {
-    try {
-      const payload = {
-        title,
-        time,
-        description,
-        maxPlayers: capacity,
-        guildId: guild?.id ?? null,
-        channelId: targetChannel.id,
-        createdBy: interaction.user.id,
-      };
+  try {
+    const payload = {
+      title,
+      time,
+      description,
+      maxPlayers: capacity,
+      guildId: guild?.id ?? null,
+      channelId: targetChannel.id,
+      createdBy: interaction.user.id,
+    };
 
-      const res = await axios.post(`${base}/events`, payload);
-      backendId = res?.data?.id ?? null;
-      console.log("✅ Synced event to Nexus:", res.status, res.data);
-    } catch (err) {
-      console.error("❌ Failed to sync event to Nexus:", err.message);
-    }
-  } else {
-    console.warn("⚠️ NEXUS_API_URL not set; skipping backend sync.");
+    const event = await createNexusEvent(payload);
+    backendId = event?.id ?? null;
+    console.log("✅ Synced event to Nexus:", event);
+  } catch (err) {
+    const detail =
+      err.response?.data?.error ||
+      err.response?.data?.message ||
+      err.message ||
+      String(err);
+    console.error("❌ Failed to sync event to Nexus:", detail);
   }
 
   const state = {
@@ -194,6 +194,9 @@ export async function execute(interaction) {
 
 /**
  * Handle button interactions for Yes / No / Cancel RSVP
+ * Hook this from index.js:
+ *   import { handleEventButton } from "./commands/create-event.js";
+ *   if (interaction.isButton()) await handleEventButton(interaction);
  */
 export async function handleEventButton(interaction) {
   if (!interaction.isButton()) return;
