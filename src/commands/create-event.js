@@ -10,6 +10,7 @@ import {
 import axios from "axios";
 
 const apiBase = process.env.NEXUS_API_URL;
+const apiKey = process.env.NEXUS_API_KEY;
 
 // Slash command definition
 export const data = new SlashCommandBuilder()
@@ -60,7 +61,6 @@ export const execute = async interaction => {
       .setStyle(ButtonStyle.Danger)
   );
 
-  // Build discord embed
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
@@ -77,26 +77,41 @@ export const execute = async interaction => {
     components: [rsvpRow]
   });
 
-  // 2️⃣ Sync to Nexus backend
+  // 2️⃣ Sync to Event Nexus backend (Base44 function)
   const payload = {
     title,
     time,
     description,
-    discordMessageId: message.id,
-    discordChannelId: message.channel.id,
+    maxPlayers: null,
     guildId: interaction.guildId,
-    createdById: interaction.user.id
+    channelId: message.channel.id,
+    createdBy: interaction.user.id
   };
 
   try {
-    const res = await axios.post(`${apiBase}/events`, payload, {
-      timeout: 8000
+    const res = await axios.post(apiBase, payload, {
+      timeout: 8000,
+      headers: {
+        "Content-Type": "application/json",
+        api_key: apiKey
+      }
     });
 
     console.log("Nexus API response:", res.status, res.data);
 
+    if (!res.data?.ok) {
+      await interaction.followUp(
+        `⚠️ Event posted here, but app sync reported an error: \`${JSON.stringify(
+          res.data
+        ).slice(0, 200)}\``
+      );
+      return;
+    }
+
+    const eventId = res.data.id || "unknown";
+
     await interaction.followUp(
-      `✅ Synced to Event Nexus app. (Event ID: \`${res.data?.event?.id || "unknown"}\`)`
+      `✅ Synced to Event Nexus app. (Event ID: \`${eventId}\`)`
     );
   } catch (err) {
     const status = err.response?.status;
@@ -111,7 +126,9 @@ export const execute = async interaction => {
     console.error("Nexus API error:", status, data || err.message);
 
     await interaction.followUp(
-      `⚠️ Event posted here, but sync FAILED.\n**HTTP:** ${status || "No response"}\n**Backend said:** \`${short}\``
+      `⚠️ Event posted here, but sync FAILED.\n**HTTP:** ${
+        status || "No response"
+      }\n**Backend said:** \`${short}\``
     );
   }
 };
