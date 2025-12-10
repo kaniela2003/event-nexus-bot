@@ -1,6 +1,12 @@
 // src/commands/create-event.js
 
-import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
+} from "discord.js";
 import axios from "axios";
 
 const apiBase = process.env.NEXUS_API_URL;
@@ -10,10 +16,7 @@ export const data = new SlashCommandBuilder()
   .setName("createevent")
   .setDescription("Create a new GTA Online event.")
   .addStringOption(opt =>
-    opt
-      .setName("title")
-      .setDescription("Event title")
-      .setRequired(true)
+    opt.setName("title").setDescription("Event title").setRequired(true)
   )
   .addStringOption(opt =>
     opt
@@ -28,16 +31,16 @@ export const data = new SlashCommandBuilder()
       .setRequired(false)
   );
 
-// Main slash command handler
-export const execute = async (interaction) => {
+// Slash command handler
+export const execute = async interaction => {
   const title = interaction.options.getString("title");
   const time = interaction.options.getString("time");
   const description =
-    interaction.options.getString("description") ?? "No description provided.";
+    interaction.options.getString("description") || "No description provided.";
 
   await interaction.deferReply({ ephemeral: false });
 
-  // RSVP buttons (we can hook these up more later)
+  // RSVP buttons
   const rsvpRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("event_rsvp_vip")
@@ -54,9 +57,10 @@ export const execute = async (interaction) => {
     new ButtonBuilder()
       .setCustomId("event_rsvp_no")
       .setLabel("No")
-      .setStyle(ButtonStyle.Danger),
+      .setStyle(ButtonStyle.Danger)
   );
 
+  // Build discord embed
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
@@ -67,68 +71,60 @@ export const execute = async (interaction) => {
     .setFooter({ text: "Event Nexus" })
     .setTimestamp();
 
-  // 1) Post event in Discord
+  // 1️⃣ Post event in Discord
   const message = await interaction.followUp({
     embeds: [embed],
-    components: [rsvpRow],
+    components: [rsvpRow]
   });
 
-  // 2) Try to sync to Event Nexus backend
-  try {
-    const payload = {
-      title,
-      time,
-      description,
-      discordMessageId: message.id,
-      discordChannelId: message.channel.id,
-      guildId: interaction.guildId,
-      createdById: interaction.user.id,
-    };
+  // 2️⃣ Sync to Nexus backend
+  const payload = {
+    title,
+    time,
+    description,
+    discordMessageId: message.id,
+    discordChannelId: message.channel.id,
+    guildId: interaction.guildId,
+    createdById: interaction.user.id
+  };
 
+  try {
     const res = await axios.post(`${apiBase}/events`, payload, {
-      timeout: 8000,
+      timeout: 8000
     });
 
     console.log("Nexus API response:", res.status, res.data);
 
-    if (res.data?.error || res.status >= 400) {
-      await interaction.followUp(
-        `⚠️ Event posted in Discord, but Nexus sync might have failed: ${
-          res.data?.error || "Unknown error from backend."
-        }`
-      );
-    } else {
-      const eventId = res.data?.event?.id || res.data?.id || "unknown";
-      await interaction.followUp(
-        `✅ Synced to Event Nexus app. (Event ID: \`${eventId}\`)`
-      );
-    }
-  } catch (err) {
-    console.error(
-      "Nexus API error:",
-      err.response?.status,
-      err.response?.data || err.message
+    await interaction.followUp(
+      `✅ Synced to Event Nexus app. (Event ID: \`${res.data?.event?.id || "unknown"}\`)`
     );
+  } catch (err) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+    const short =
+      typeof data === "string"
+        ? data.slice(0, 200)
+        : typeof data === "object"
+        ? JSON.stringify(data).slice(0, 200)
+        : err.message;
+
+    console.error("Nexus API error:", status, data || err.message);
 
     await interaction.followUp(
-      "⚠️ Event posted here, but I couldn't sync it to the Event Nexus app."
+      `⚠️ Event posted here, but sync FAILED.\n**HTTP:** ${status || "No response"}\n**Backend said:** \`${short}\``
     );
   }
 };
 
-// Button handler for RSVP interactions
+// Button handler required by index.js
 export async function handleEventButton(interaction) {
   const { customId, user } = interaction;
-
-  // Only handle our event RSVP buttons
   if (!customId.startsWith("event_rsvp_")) return;
 
-  const choice = customId.replace("event_rsvp_", ""); // vip / yes / maybe / no / waitlist?
+  const choice = customId.replace("event_rsvp_", "");
 
-  // Later we can sync this choice to the backend (/events/:id/rsvp).
-  // For now, just confirm to the user.
   await interaction.reply({
-    content: `You selected **${choice.toUpperCase()}** for this event, <@${user.id}>.`,
-    ephemeral: true,
+    content: `You selected **${choice.toUpperCase()}**, <@${user.id}>.`,
+    ephemeral: true
   });
 }
