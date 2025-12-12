@@ -3,7 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 
-const PORT = process.env.SYNC_PORT || 3000;
+const PORT = process.env.PORT || process.env.SYNC_PORT || 3000;
 
 // Optional shared secret for webhooks (set in Railway later if you want)
 const WEBHOOK_SECRET = process.env.NEXUS_WEBHOOK_SECRET || null;
@@ -161,3 +161,4 @@ export function startSyncHub() {
 
 // Optional: so other modules (like create-event.js) can import just this
 export { broadcastUpdate };
+
