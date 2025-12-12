@@ -44,6 +44,67 @@ function isProbablyPublicUrl(url) {
   return url.startsWith("https://") || url.startsWith("http://");
 }
 
+async function updateDiscordForEvent(client, state, eventId) {
+  if (!state.channelId || !state.messageId) return;
+
+  const channel = await client.channels.fetch(state.channelId).catch(() => null);
+  if (!channel) return;
+
+  const msg = await channel.messages.fetch(state.messageId).catch(() => null);
+  if (!msg) return;
+
+  const old = msg.embeds?.[0];
+  const title = old?.title || "Event";
+  const desc = old?.description || " ";
+
+  const c = counts(state);
+
+  const embed = new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(desc)
+    .addFields(
+      // preserve Time field if present
+      ...(((old?.fields || []).filter(f => f?.name === "Time")) || []),
+      { name: "RSVP", value: state.maxPlayers > 0 ? `${c.going}/${c.maxPlayers}` : `${c.going}`, inline: true },
+      { name: "Waitlist", value: `${c.waitlist}`, inline: true }
+    )
+    .setFooter({ text: "Event Nexus" })
+    .setTimestamp();
+
+  const img = old?.image?.url;
+  if (img) embed.setImage(img);
+
+  await msg.edit({ embeds: [embed], components: [buildRsvpRow(eventId)] });
+}
+
+async function updateStaffRoster(client, state, eventId) {
+  const staffChannelId = STAFF_LOG_CHANNEL || state.channelId;
+  if (!staffChannelId) return;
+
+  const channel = await client.channels.fetch(staffChannelId).catch(() => null);
+  if (!channel) return;
+
+  const roster = formatRoster(state, client);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`Staff Roster — ${eventId}`)
+    .addFields(
+      { name: `Going (${state.going.length})`, value: roster.goingText.slice(0, 3900) || "None" },
+      { name: `Waitlist (${state.waitlist.length})`, value: roster.waitText.slice(0, 3900) || "None" }
+    )
+    .setFooter({ text: "Staff only" })
+    .setTimestamp();
+
+  if (state.staffMessageId) {
+    const msg = await channel.messages.fetch(state.staffMessageId).catch(() => null);
+    if (msg) return await msg.edit({ embeds: [embed] });
+  }
+
+  const sent = await channel.send({ embeds: [embed] });
+  state.staffMessageId = sent.id;
+  state.staffChannelId = staffChannelId;
+}
+
 export function startSyncHub() {
   const app = express();
 
@@ -153,10 +214,66 @@ app.use(express.json({ limit: "5mb" }));
   // APP -> BOT: Mirror RSVP (placeholder for next phase)
   // POST /webhook/rsvp
   // -----------------------------
+    // App -> Bot RSVP sync (applies to Discord + forwards to app for persistence)
   app.post("/webhook/rsvp", auth, async (req, res) => {
-    console.log("📥 Webhook /rsvp:", JSON.stringify(req.body || {}));
-    wsBroadcast({ type: "app_rsvp", data: req.body || {}, ts: Date.now() });
-    return res.json({ ok: true });
+    try {
+      const body = req.body || {};
+      // Accept shapes:
+      // { eventId, userId, status, psn?, ig? }
+      // { event: { id }, user: { id }, action/status }
+      const eventId = body.eventId || body.event?.id || body.event?.eventId || null;
+      const userId = body.userId || body.user?.id || body.user?.userId || null;
+      const statusRaw = (body.status || body.action || "").toString().toLowerCase();
+
+      if (!eventId || !userId) {
+        return res.status(400).json({ ok: false, error: "Missing eventId/userId" });
+      }
+
+      const state = ensureState(rsvpStore, eventId, body.maxPlayers);
+      const entry = { userId, psn: (body.psn || null), ig: (body.ig || null) };
+
+      const isCancel = statusRaw.includes("cancel") || statusRaw === "no" || statusRaw === "leave";
+      const isJoin = !isCancel; // default join
+
+      if (isCancel) {
+        removeUser(state.going, userId);
+        removeUser(state.waitlist, userId);
+        promoteIfPossible(state);
+      } else {
+        // join/update details
+        if (isIn(state.going, userId)) upsertUser(state.going, entry);
+        else if (isIn(state.waitlist, userId)) upsertUser(state.waitlist, entry);
+        else {
+          const capped = state.maxPlayers && state.maxPlayers > 0;
+          if (!capped || state.going.length < state.maxPlayers) state.going.push(entry);
+          else state.waitlist.push(entry);
+        }
+      }
+
+      // Update Discord views
+      if (discordClient) {
+        await updateDiscordForEvent(discordClient, state, eventId);
+        await updateStaffRoster(discordClient, state, eventId);
+      }
+
+      // Forward to app (best-effort)
+      await postRsvpToApp({
+        type: "rsvp_update",
+        eventId,
+        userId,
+        status: isCancel ? "cancel" : "rsvp",
+        psn: entry.psn,
+        ig: entry.ig,
+      });
+
+      wsBroadcast({ type: "rsvp_synced_from_app", eventId, userId, status: isCancel ? "cancel" : "rsvp", ts: Date.now() });
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("🔥 /webhook/rsvp error:", err);
+      return res.status(500).json({ ok: false, error: "RSVP sync failed", message: err?.message || String(err) });
+    }
+  });return res.json({ ok: true });
   });
 
   const server = createServer(app);
@@ -170,6 +287,7 @@ app.use(express.json({ limit: "5mb" }));
     console.log(`🌐 WebSocket/HTTP SyncHub listening on port ${PORT}`);
   });
 }
+
 
 
 
