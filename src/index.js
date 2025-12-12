@@ -7,21 +7,19 @@ import { fileURLToPath } from "url";
 import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
 import { startSyncHub, attachDiscordClient } from "./syncHub.js";
 
+// ✅ Hard-wire RSVP handlers so buttons NEVER go unhandled
+import { handleEventButton, handleModal } from "./commands/rsvp-buttons.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   partials: [Partials.Channel],
 });
 
 client.commands = new Collection();
 
-// Load commands
 console.log("🔍 Loading commands...");
 const commandsPath = path.join(__dirname, "commands");
 const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
@@ -34,7 +32,6 @@ for (const file of files) {
   }
 }
 
-// Start SyncHub now (HTTP+WS)
 startSyncHub();
 
 client.once("clientReady", () => {
@@ -42,32 +39,34 @@ client.once("clientReady", () => {
   console.log(`🤖 Event Nexus bot ready as ${client.user.tag}`);
 });
 
-client.on("interactionCreate", async (interaction) => {
+client.on("interactionCreate", async (i) => {
   try {
-    if (interaction.isChatInputCommand()) {
-      const cmd = client.commands.get(interaction.commandName);
-      if (!cmd) return;
-      await cmd.execute(interaction);
+    if (i.isChatInputCommand()) {
+      const cmd = client.commands.get(i.commandName);
+      if (cmd) return await cmd.execute(i);
+      return;
     }
 
-    // If any command module exports handleEventButton, call it for button interactions
-    if (interaction.isButton()) {
-      for (const file of files) {
-        const mod = await import(`file://${path.join(commandsPath, file)}`);
-        if (typeof mod.handleEventButton === "function") {
-          await mod.handleEventButton(interaction);
-          break;
-        }
-      }
+    if (i.isButton()) {
+      return await handleEventButton(i);
     }
-  } catch (err) {
-    console.error("❌ Interaction error:", err);
+
+    if (i.isModalSubmit()) {
+      return await handleModal(i);
+    }
+  } catch (e) {
+    console.error("❌ interaction error:", e);
+    try {
+      if (!i.replied && !i.deferred) {
+        await i.reply({ content: "⚠️ Interaction failed. Try again.", ephemeral: true });
+      }
+    } catch {}
   }
 });
 
 const token = process.env.DISCORD_BOT_TOKEN;
 if (!token) {
-  console.error("❌ ERROR: DISCORD_BOT_TOKEN missing from environment!");
+  console.error("❌ DISCORD_BOT_TOKEN missing");
   process.exit(1);
 }
 
