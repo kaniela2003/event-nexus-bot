@@ -107,7 +107,7 @@ app.use(express.json({ limit: "5mb" }));
       const embed = new EmbedBuilder()
         .setTitle(event.title)
         .setDescription(event.description || "No description provided.")
-        .addFields({ name: "Time", value: String(event.time), inline: true })
+        .addFields({ name: "Time", value: formatTimeRange(event), inline: false })
         .setFooter({ text: "Event Nexus" })
         .setTimestamp();
 
@@ -170,5 +170,6 @@ app.use(express.json({ limit: "5mb" }));
     console.log(`🌐 WebSocket/HTTP SyncHub listening on port ${PORT}`);
   });
 }
+
 
 
