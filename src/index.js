@@ -1,137 +1,95 @@
 // src/index.js
-import "dotenv/config";
-import http from "node:http";
-import { WebSocketServer } from "ws";
-import { Client, GatewayIntentBits, Collection } from "discord.js";
-import { loadCommands, registerGlobalCommands } from "./commands.js";
-import { handleEventButton } from "./commands/create-event.js";
 
-// ----------------------------------------
-// Discord client
-// ----------------------------------------
+import dotenv from "dotenv";
+dotenv.config();
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
+
+// Start the Webhook + WebSocket Sync Hub
+import { startSyncHub } from "./syncHub.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Initialize Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
+  partials: [Partials.Channel],
 });
 
 client.commands = new Collection();
 
-// ----------------------------------------
-// WebSocket setup
-// ----------------------------------------
-const PORT = process.env.PORT || 3000;
+// Load command files
+const commandsPath = path.join(__dirname, "commands");
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
 
-const server = http.createServer((req, res) => {
-  // Simple health check for Railway / browser
-  if (req.url === "/" || req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, service: "Event Nexus WS" }));
+console.log("🔍 Loading commands...");
+for (const file of commandFiles) {
+  const filePath = path.join(commandsPath, file);
+  const command = await import(`file://${filePath}`);
+
+  if ("data" in command && "execute" in command) {
+    client.commands.set(command.data.name, command);
+    console.log(`⚡ Loaded command: ${command.data.name}`);
   } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
-
-const wss = new WebSocketServer({ server });
-
-/**
- * Keep track of connected WebSocket clients
- */
-const wsClients = new Set();
-
-wss.on("connection", (socket) => {
-  console.log("🌐 WebSocket client connected");
-  wsClients.add(socket);
-
-  socket.on("close", () => {
-    console.log("🌐 WebSocket client disconnected");
-    wsClients.delete(socket);
-  });
-
-  socket.on("error", (err) => {
-    console.error("🌐 WebSocket error:", err);
-  });
-
-  // Optional: handle inbound messages from app if needed later
-  socket.on("message", (data) => {
-    console.log("🌐 Received from client:", data.toString());
-  });
-});
-
-/**
- * Helper to broadcast JSON to all WS clients
- */
-export function broadcastToApp(payload) {
-  const data = JSON.stringify(payload);
-  for (const socket of wsClients) {
-    if (socket.readyState === socket.OPEN) {
-      socket.send(data);
-    }
+    console.log(`❌ Command at ${file} missing required properties.`);
   }
 }
 
-// ----------------------------------------
-// Init Discord bot
-// ----------------------------------------
-async function initBot() {
-  try {
-    console.log("🔍 Loading commands...");
-    const commands = await loadCommands();
-    client.commands = commands;
+// Load button handlers (like RSVP)
+const buttonHandlers = {};
+for (const file of commandFiles) {
+  const filePath = path.join(commandsPath, file);
+  const mod = await import(`file://${filePath}`);
 
-    console.log("📡 Logging into Discord...");
-    await client.login(process.env.DISCORD_BOT_TOKEN);
-
-    console.log("📦 Registering guild slash commands...");
-    await registerGlobalCommands(commands);
-
-    console.log("🤖 Event Nexus bot ready.");
-  } catch (err) {
-    console.error("❌ Failed to initialize bot:", err);
+  if (mod.handleEventButton) {
+    buttonHandlers["event_rsvp"] = mod.handleEventButton;
   }
 }
 
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+// Start the webhook + websocket sync hub ONCE
+startSyncHub();
+
+// Discord ready
+client.once("clientReady", () => {
+  console.log(`🤖 Event Nexus bot ready as ${client.user.tag}`);
 });
 
-// Handle slash commands + RSVP buttons
-client.on("interactionCreate", async (interaction) => {
+// Interaction handler
+client.on("interactionCreate", async interaction => {
   try {
+    // Slash Commands
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
-      if (!command) {
-        console.warn(`⚠️ Unknown command: /${interaction.commandName}`);
-        return;
-      }
-
+      if (!command) return;
       await command.execute(interaction);
-      return;
     }
 
+    // Button interactions: RSVP
     if (interaction.isButton()) {
-      await handleEventButton(interaction);
-      return;
+      const id = interaction.customId;
+
+      if (id.startsWith("event_rsvp")) {
+        await buttonHandlers["event_rsvp"](interaction);
+      }
     }
   } catch (err) {
-    console.error("❌ Error handling interaction:", err);
-
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "❌ Something went wrong handling that interaction.",
-        ephemeral: true,
-      });
-    }
+    console.error("❌ Interaction error:", err);
   }
 });
 
-// ----------------------------------------
-// Start HTTP+WS server + bot
-// ----------------------------------------
-server.listen(PORT, () => {
-  console.log(`🌐 WebSocket/HTTP server listening on port ${PORT}`);
-  initBot();
-});
+// Log in
+const TOKEN = process.env.DISCORD_BOT_TOKEN;
+if (!TOKEN) {
+  console.error("❌ ERROR: DISCORD_BOT_TOKEN missing from environment!");
+  process.exit(1);
+}
+
+console.log("📡 Logging into Discord...");
+client.login(TOKEN);
