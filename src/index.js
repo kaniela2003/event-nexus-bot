@@ -1,5 +1,4 @@
-// src/index.js
-import dotenv from "dotenv";
+﻿import dotenv from "dotenv";
 dotenv.config();
 
 import fs from "fs";
@@ -22,29 +21,55 @@ const client = new Client({
 
 client.commands = new Collection();
 
+// Load commands
 console.log("🔍 Loading commands...");
 const commandsPath = path.join(__dirname, "commands");
-for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"))) {
-  const cmd = await import(`file://${path.join(commandsPath, file)}`);
-  if (cmd.data && cmd.execute) {
-    client.commands.set(cmd.data.name, cmd);
-    console.log(`⚡ Loaded command: ${cmd.data.name}`);
+const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
+
+for (const file of files) {
+  const mod = await import(`file://${path.join(commandsPath, file)}`);
+  if (mod?.data?.name && typeof mod.execute === "function") {
+    client.commands.set(mod.data.name, mod);
+    console.log(`⚡ Loaded command: ${mod.data.name}`);
   }
 }
 
-// Start SyncHub
+// Start SyncHub now (HTTP+WS)
 startSyncHub();
 
 client.once("clientReady", () => {
   attachDiscordClient(client);
-  console.log(`🤖 Event Nexus Bot ready as ${client.user.tag}`);
+  console.log(`🤖 Event Nexus bot ready as ${client.user.tag}`);
 });
 
-client.on("interactionCreate", async i => {
-  if (i.isChatInputCommand()) {
-    const cmd = client.commands.get(i.commandName);
-    if (cmd) await cmd.execute(i);
+client.on("interactionCreate", async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      const cmd = client.commands.get(interaction.commandName);
+      if (!cmd) return;
+      await cmd.execute(interaction);
+    }
+
+    // If any command module exports handleEventButton, call it for button interactions
+    if (interaction.isButton()) {
+      for (const file of files) {
+        const mod = await import(`file://${path.join(commandsPath, file)}`);
+        if (typeof mod.handleEventButton === "function") {
+          await mod.handleEventButton(interaction);
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("❌ Interaction error:", err);
   }
 });
 
-client.login(process.env.DISCORD_BOT_TOKEN);
+const token = process.env.DISCORD_BOT_TOKEN;
+if (!token) {
+  console.error("❌ ERROR: DISCORD_BOT_TOKEN missing from environment!");
+  process.exit(1);
+}
+
+console.log("📡 Logging into Discord...");
+client.login(token);

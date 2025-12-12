@@ -1,4 +1,4 @@
-// src/commands/create-event.js
+﻿// src/commands/create-event.js
 
 import {
   SlashCommandBuilder,
@@ -71,13 +71,13 @@ export const execute = async interaction => {
     .setFooter({ text: "Event Nexus" })
     .setTimestamp();
 
-  // 1️⃣ Post event in Discord
+  // 1ï¸âƒ£ Post event in Discord
   const message = await interaction.followUp({
     embeds: [embed],
     components: [rsvpRow]
   });
 
-  // 2️⃣ Sync to Event Nexus backend (Base44 function)
+  // 2ï¸âƒ£ Sync to Event Nexus backend (Base44 function)
   const payload = {
     title,
     time,
@@ -101,7 +101,7 @@ export const execute = async interaction => {
 
     if (!res.data?.ok) {
       await interaction.followUp(
-        `⚠️ Event posted here, but app sync reported an error: \`${JSON.stringify(
+        `âš ï¸ Event posted here, but app sync reported an error: \`${JSON.stringify(
           res.data
         ).slice(0, 200)}\``
       );
@@ -111,7 +111,7 @@ export const execute = async interaction => {
     const eventId = res.data.id || "unknown";
 
     await interaction.followUp(
-      `✅ Synced to Event Nexus app. (Event ID: \`${eventId}\`)`
+      `âœ… Synced to Event Nexus app. (Event ID: \`${eventId}\`)`
     );
   } catch (err) {
     const status = err.response?.status;
@@ -126,7 +126,7 @@ export const execute = async interaction => {
     console.error("Nexus API error:", status, data || err.message);
 
     await interaction.followUp(
-      `⚠️ Event posted here, but sync FAILED.\n**HTTP:** ${
+      `âš ï¸ Event posted here, but sync FAILED.\n**HTTP:** ${
         status || "No response"
       }\n**Backend said:** \`${short}\``
     );
@@ -145,3 +145,4 @@ export async function handleEventButton(interaction) {
     ephemeral: true
   });
 }
+
