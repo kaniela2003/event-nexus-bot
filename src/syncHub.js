@@ -48,6 +48,14 @@ export function startSyncHub() {
   const app = express();
   app.use(express.json({ limit: "5mb" }));
 
+  // ===== REQUEST LOGGER (helps debug Base44 provider) =====
+  app.use((req, res, next) => {
+    const ts = new Date().toISOString();
+    console.log(`🧾 [${ts}] ${req.method} ${req.originalUrl}`);
+    console.log("   Headers:", JSON.stringify(req.headers));
+    next();
+  });
+
   app.get("/health", (_, res) => {
     res.json({ ok: true, service: "Event Nexus Sync Hub", version: "v1" });
   });
@@ -150,3 +158,4 @@ export function startSyncHub() {
     console.log(`🌐 WebSocket/HTTP SyncHub listening on port ${PORT}`);
   });
 }
+
