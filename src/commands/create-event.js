@@ -27,8 +27,8 @@ function toDiscordTs(value, style="F") {
 
 function buildRsvpRow(eventId) {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`rsvp:join:${eventId}`).setLabel("RSVP âœ…").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`rsvp:cancel:${eventId}`).setLabel("Cancel âŒ").setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`rsvp:join:${eventId}`).setLabel("RSVP Ã¢Å“â€¦").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`rsvp:cancel:${eventId}`).setLabel("Cancel Ã¢ÂÅ’").setStyle(ButtonStyle.Danger)
   );
 }
 
@@ -92,7 +92,7 @@ export async function execute(interaction) {
     .setTitle(title)
     .setDescription(description || "No description provided.")
     .addFields(
-      { name: "Time", value: end ? `${toDiscordTs(start,"F")} â†’ ${toDiscordTs(end,"t")}` : `${toDiscordTs(start,"F")}`, inline: false },
+      { name: "Time", value: end ? `${toDiscordTs(start,"F")} Ã¢â€ â€™ ${toDiscordTs(end,"t")}` : `${toDiscordTs(start,"F")}`, inline: false },
       { name: "RSVP", value: maxPlayers ? `0/${maxPlayers}` : "0", inline: true },
       { name: "Waitlist", value: "0", inline: true }
     )
@@ -106,13 +106,13 @@ export async function execute(interaction) {
   const channelId = defaultChannelId || interaction.channelId;
   const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
   if (!channel) {
-    return await interaction.editReply(`âŒ Could not post event: cannot access channel ${channelId}`);
+    return await interaction.editReply(`Ã¢ÂÅ’ Could not post event: cannot access channel ${channelId}`);
   }
 
   await channel.send({ embeds: [embed], components: [row] });
 
   if (appOk) {
-    return await interaction.editReply(`âœ… Event created + synced to app. (Event ID: ${eventId})`);
+    return await interaction.editReply(`Ã¢Å“â€¦ Event created + synced to app. (Event ID: ${eventId})`);
   }
-  return await interaction.editReply(`âš ï¸ Event posted to Discord, but app sync FAILED.\nReason: ${JSON.stringify(appErr).slice(0, 900)}`);
+  return await interaction.editReply(`Ã¢Å¡Â Ã¯Â¸Â Event posted to Discord, but app sync FAILED.\nReason: ${JSON.stringify(appErr).slice(0, 900)}`);
 }
