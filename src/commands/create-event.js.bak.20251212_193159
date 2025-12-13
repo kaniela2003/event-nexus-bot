@@ -117,4 +117,3 @@ export async function execute(interaction) {
   }
   return await interaction.editReply(`⚠️ Event posted to Discord, but app sync FAILED.\nReason: ${JSON.stringify(appErr).slice(0, 900)}`);
 }
-

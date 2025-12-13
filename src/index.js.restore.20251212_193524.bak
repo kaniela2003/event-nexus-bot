@@ -1,5 +1,4 @@
-﻿import { handleRsvpButton } from "./rsvp.js";
-import dotenv from "dotenv";
+﻿import dotenv from "dotenv";
 dotenv.config();
 
 import fs from "fs";
@@ -7,6 +6,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
 import { startSyncHub, attachDiscordClient } from "./syncHub.js";
+
+import { handleEventButton, handleModal } from "./commands/rsvp-buttons.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -59,11 +61,20 @@ client.on("interactionCreate", async (i) => {
     }
 
     if (i.isButton()) {
-      console.log(🧷 Button:  by );
-      return await handleRsvpButton(i);
-    }
+      console.log(`🧷 Button: ${i.customId} by ${i.user?.tag || i.user?.id}`);
+
+      // For cancel button we can defer instantly; for join we must show modal
+      if (String(i.customId || "").startsWith("rsvp_cancel:")) {
+        if (!i.deferred && !i.replied) await i.deferReply({ ephemeral: true });
+      }
 
       return await handleEventButton(i);
+    }
+
+    if (i.isModalSubmit()) {
+      console.log(`🧾 Modal: ${i.customId} by ${i.user?.tag || i.user?.id}`);
+      if (!i.deferred && !i.replied) await i.deferReply({ ephemeral: true });
+      return await handleModal(i);
     }
 
   } catch (e) {
@@ -88,5 +99,4 @@ if (!token) {
 
 console.log("📡 Logging into Discord...");
 client.login(token);
-
 

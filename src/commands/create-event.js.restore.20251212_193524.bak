@@ -118,3 +118,15 @@ export async function execute(interaction) {
   return await interaction.editReply(`⚠️ Event posted to Discord, but app sync FAILED.\nReason: ${JSON.stringify(appErr).slice(0, 900)}`);
 }
 
+
+// Button handler for RSVP interactions
+export async function handleEventButton(interaction) {
+  const { customId, user } = interaction;
+  if (!customId.startsWith("event_rsvp_")) return;
+  const choice = customId.replace("event_rsvp_", "");
+  await interaction.reply({
+    content: You selected **** for this event, <@>.,
+    ephemeral: true
+  });
+}
+
