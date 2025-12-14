@@ -82,3 +82,4 @@ if (!token) {
 
 console.log("📡 Logging into Discord...");
 client.login(token);
+

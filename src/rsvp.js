@@ -1,147 +1,78 @@
-﻿// src/rsvp.js
-import { EmbedBuilder } from "discord.js";
+﻿import axios from "axios";
 
-// eventId -> state
-// state = { maxPlayers:number, vip:Set, going:Set, maybe:Set, waitlist:Array<string> }
-const events = new Map();
+// In-memory RSVP map (eventId -> { going:Set<string> })
+const state = new Map();
 
-export function registerEvent(eventId, maxPlayers) {
-  const mp = Number(maxPlayers);
-  if (!events.has(eventId)) {
-    events.set(eventId, {
-      maxPlayers: Number.isFinite(mp) && mp > 0 ? mp : 0,
-      vip: new Set(),
-      going: new Set(),
-      maybe: new Set(),
-      waitlist: [],
-    });
-  } else {
-    const s = events.get(eventId);
-    if (Number.isFinite(mp) && mp > 0) s.maxPlayers = mp;
-  }
-  return events.get(eventId);
+export function registerEvent(eventId) {
+  if (!eventId) return;
+  if (!state.has(eventId)) state.set(eventId, { going: new Set() });
 }
 
-function removeFromWaitlist(state, userId) {
-  const next = [];
-  let removed = false;
-  for (const id of state.waitlist) {
-    if (id === userId && !removed) removed = true;
-    else next.push(id);
+function parseButton(customId) {
+  const id = String(customId || "");
+  if (id.startsWith("rsvp_join:")) return { action: "join", eventId: id.split(":")[1] };
+  if (id.startsWith("rsvp_cancel:")) return { action: "cancel", eventId: id.split(":")[1] };
+
+  // Also accept rsvp:<action>:<eventId> if you ever switch back
+  if (id.startsWith("rsvp:")) {
+    const parts = id.split(":");
+    return { action: parts[1], eventId: parts[2] };
   }
-  state.waitlist = next;
-  return removed;
+  return null;
 }
 
-function counts(state) {
-  const spotsUsed = state.vip.size + state.going.size;
-  return {
-    spotsUsed,
-    maxPlayers: state.maxPlayers,
-    waitlist: state.waitlist.length,
-    vip: state.vip.size,
-    going: state.going.size,
-    maybe: state.maybe.size,
-  };
-}
+export async function handleRsvpButton(i) {
+  if (!i.isButton()) return;
 
-function fmtSet(set) {
-  const arr = [...set];
-  return arr.length ? arr.map(id => `<@${id}>`).join("\n") : "—";
-}
+  const parsed = parseButton(i.customId);
+  if (!parsed?.eventId) return; // not ours
 
-function fmtWaitlist(list) {
-  return list.length ? list.map((id, i) => `${i + 1}. <@${id}>`).join("\n") : "—";
-}
+  // ✅ Always ACK fast to prevent "Interaction failed"
+  await i.deferUpdate().catch(() => {});
 
-function rebuildEmbed(msg, state) {
-  const old = msg.embeds?.[0];
-  const base = old ? EmbedBuilder.from(old) : new EmbedBuilder().setTitle("Event").setDescription(" ");
+  const { action, eventId } = parsed;
+  registerEvent(eventId);
 
-  // Keep the existing Time field if present
-  const oldTime = (old?.fields || []).find(f => f?.name === "Time");
+  const userId = i.user.id;
+  const s = state.get(eventId);
 
-  const c = counts(state);
-  const spotLabel =
-    state.maxPlayers > 0 ? `Spots (${c.spotsUsed}/${c.maxPlayers})` : `Spots (${c.spotsUsed})`;
+  if (action === "join" || action === "yes") s.going.add(userId);
+  if (action === "cancel") s.going.delete(userId);
 
-  const fields = [];
-  if (oldTime) fields.push(oldTime);
+  // ✅ Optional: try to sync to Base44 if endpoint exists (won't break Discord if it fails)
+  // NOTE: Your snapshot only guarantees /events; RSVP endpoint must exist for this to work.
+  const base = process.env.NEXUS_API_URL; // e.g. https://eventnexus.base44.app/functions/api
+  const apiKey = process.env.BASE44_API_KEY || process.env.NEXUS_API_KEY;
 
-  fields.push(
-    { name: spotLabel, value: " ", inline: false },
-    { name: `VIP (${c.vip})`, value: fmtSet(state.vip), inline: false },
-    { name: `Going (${c.going})`, value: fmtSet(state.going), inline: false },
-    { name: `Maybe (${c.maybe})`, value: fmtSet(state.maybe), inline: false },
-    { name: `Waitlist (${c.waitlist})`, value: fmtWaitlist(state.waitlist), inline: false },
-  );
-
-  base.setFields(fields);
-  base.setFooter({ text: "Event Nexus" });
-  base.setTimestamp(new Date());
-
-  return base;
-}
-
-export async function handleRsvpButton(interaction) {
-  if (!interaction.isButton()) return;
-
-  // customId format: rsvp:<action>:<eventId>
-  const parts = String(interaction.customId || "").split(":");
-  if (parts.length < 3) return;
-
-  const [prefix, action, eventId] = parts;
-  if (prefix !== "rsvp" || !eventId) return;
-
-  const state = events.get(eventId);
-  if (!state) {
-    // Must respond somehow or Discord shows "Interaction Failed"
-    await interaction.reply({ content: "❌ This event is no longer active.", ephemeral: true }).catch(() => {});
-    return;
-  }
-
-  // Acknowledge immediately (no visible reply)
-  await interaction.deferUpdate().catch(() => {});
-
-  const userId = interaction.user.id;
-
-  // Always remove them from all buckets first
-  state.vip.delete(userId);
-  state.going.delete(userId);
-  state.maybe.delete(userId);
-  removeFromWaitlist(state, userId);
-
-  const max = state.maxPlayers;
-  const used = state.vip.size + state.going.size;
-
-  if (action === "vip") {
-    if (max > 0 && used >= max) state.waitlist.push(userId);
-    else state.vip.add(userId);
-  }
-
-  if (action === "yes") {
-    const nowUsed = state.vip.size + state.going.size;
-    if (max > 0 && nowUsed >= max) state.waitlist.push(userId);
-    else state.going.add(userId);
-  }
-
-  if (action === "maybe") {
-    state.maybe.add(userId);
-  }
-
-  if (action === "no") {
-    // nothing (they were already removed)
-  }
-
-  if (action === "cancel") {
-    // If a spot opened, promote from waitlist into "going" (VIP can be handled later if you want)
-    if (state.waitlist.length > 0) {
-      const nextId = state.waitlist.shift();
-      if (max > 0 && (state.vip.size + state.going.size) < max) state.going.add(nextId);
-      else state.waitlist.unshift(nextId);
+  if (base) {
+    try {
+      await axios.post(
+        `${base}/rsvp`,
+        { eventId, userId, action },
+        { headers: apiKey ? { "api_key": apiKey } : {}, timeout: 8000 }
+      );
+    } catch (e) {
+      // Don’t throw — Discord already acknowledged.
+      console.log("RSVP sync skipped/failed:", e?.response?.status || "", e?.response?.data || e?.message || String(e));
     }
   }
 
-  const embed = rebuildEmbed(interaction.message, state);
-  await interaction.message.edit({ embeds: [embed] }).catch(() => {});
+  // ✅ Update the embed (simple count) if there is an embed
+  try {
+    const msg = i.message;
+    const emb = msg.embeds?.[0];
+    if (!emb) return;
+
+    const next = {
+      ...emb.toJSON(),
+      fields: (emb.fields || []).map(f => {
+        if (String(f.name).toLowerCase() === "rsvp") {
+          return { ...f, value: String(s.going.size) };
+        }
+        return f;
+      })
+    };
+
+    await msg.edit({ embeds: [next] }).catch(() => {});
+  } catch {}
 }
