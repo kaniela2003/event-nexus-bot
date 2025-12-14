@@ -1,223 +1,126 @@
-﻿import { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from "discord.js";
-import { rsvpStore, buildRsvpRow } from "../syncHub.js";
-import { ensureState, upsertUser, removeUser, isIn, promoteIfPossible, counts } from "../utils/rsvpEngine.js";
-import { postRsvpToApp } from "../utils/nexusApi.js";
+﻿import { EmbedBuilder } from "discord.js";
 
-const STAFF_LOG_CHANNEL = process.env.STAFF_LOG_CHANNEL || null;
+// eventId -> { maxSlots:number, confirmed:Set<string>, waitlist:string[] }
+const events = new Map();
+
+export function registerEvent(eventId, maxSlots) {
+  if (!eventId) return;
+  const slots = Number(maxSlots);
+  events.set(eventId, {
+    maxSlots: Number.isFinite(slots) && slots > 0 ? slots : 30,
+    confirmed: new Set(),
+    waitlist: [],
+  });
+}
+
+function ensureState(eventId) {
+  if (!events.has(eventId)) registerEvent(eventId, 30);
+  return events.get(eventId);
+}
+
+function rebuildEmbed(originalEmbed, state) {
+  const embed = originalEmbed ? EmbedBuilder.from(originalEmbed) : new EmbedBuilder();
+
+  const confirmedList =
+    [...state.confirmed].map((id) => `<@${id}>`).join("\n") || "—";
+
+  const waitlistList =
+    state.waitlist.map((id, idx) => `${idx + 1}. <@${id}>`).join("\n") || "—";
+
+  // Overwrite the RSVP fields consistently
+  embed.setFields([
+    { name: `Spots (${state.confirmed.size}/${state.maxSlots})`, value: confirmedList, inline: false },
+    { name: `Waitlist (${state.waitlist.length})`, value: waitlistList, inline: false },
+  ]);
+
+  return embed;
+}
 
 export async function handleEventButton(interaction) {
-  try {
-    const parts = String(interaction.customId || "").split(":");
-    const kind = parts[0];
-    const eventId = parts[1];
+  if (!interaction?.isButton?.()) return;
 
-    if (!eventId) {
-      return await interaction.reply({ content: "⚠️ Missing event id.", ephemeral: true });
-    }
+  const cid = String(interaction.customId || "");
 
-    const state = ensureState(rsvpStore, eventId, null);
+  // Support both formats:
+  //   rsvp_join:<eventId>
+  //   rsvp_cancel:<eventId>
+  // And also allow:
+  //   rsvp:yes:<eventId> / rsvp:cancel:<eventId>
+  let action = null;
+  let eventId = null;
 
-    // RSVP -> show modal FAST (no defer before showModal)
-    if (kind === "rsvp_join") {
-      const modal = new ModalBuilder()
-        .setCustomId(`rsvp_modal:${eventId}`)
-        .setTitle("RSVP Details");
-
-      const psn = new TextInputBuilder()
-        .setCustomId("psn")
-        .setLabel("PSN (required)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const ig = new TextInputBuilder()
-        .setCustomId("ig")
-        .setLabel("Instagram (optional)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(psn),
-        new ActionRowBuilder().addComponents(ig)
-      );
-
-      return await interaction.showModal(modal);
-    }
-
-    // Cancel -> defer immediately so Discord never times out
-    if (kind === "rsvp_cancel") {
-      await interaction.deferReply({ ephemeral: true });
-
-      const userId = interaction.user.id;
-
-      const wasGoing = isIn(state.going, userId);
-      const wasWait = isIn(state.waitlist, userId);
-
-      removeUser(state.going, userId);
-      removeUser(state.waitlist, userId);
-
-      const promoted = promoteIfPossible(state);
-
-      // Update message counts (edit fast)
-      await updateEventMessage(interaction, state, eventId).catch(() => {});
-      await updateStaffRoster(interaction, state, eventId).catch(() => {});
-
-      // Sync to app (best effort)
-      await postRsvpToApp({ type: "rsvp_update", eventId, userId, status: "cancel" }).catch(() => {});
-
-      const msg =
-        wasGoing ? `❌ Removed you from RSVP.${promoted ? ` ✅ Promoted <@${promoted.userId}> from waitlist.` : ""}` :
-        wasWait ? `❌ Removed you from waitlist.` :
-        `You were not on the RSVP list.`;
-
-      return await interaction.editReply(msg);
-    }
-
-    // Unknown button
-    return await interaction.reply({ content: "⚠️ Unknown action.", ephemeral: true });
-
-  } catch (e) {
-    console.error("❌ handleEventButton error:", e);
-    try {
-      if (!interaction.replied && !interaction.deferred) {
-        return await interaction.reply({ content: "⚠️ Interaction failed. Try again.", ephemeral: true });
-      }
-      if (interaction.deferred && !interaction.replied) {
-        return await interaction.editReply("⚠️ Interaction failed. Try again.");
-      }
-    } catch {}
+  if (cid.startsWith("rsvp_join:")) {
+    action = "yes";
+    eventId = cid.split(":")[1] || null;
+  } else if (cid.startsWith("rsvp_cancel:")) {
+    action = "cancel";
+    eventId = cid.split(":")[1] || null;
+  } else if (cid.startsWith("rsvp:")) {
+    const parts = cid.split(":"); // rsvp:action:eventId
+    action = parts[1] || null;
+    eventId = parts[2] || null;
+  } else {
+    return; // not ours
   }
-}
 
-export async function handleModal(interaction) {
+  if (!eventId) {
+    return await interaction.reply({ content: "⚠️ Missing event id.", ephemeral: true });
+  }
+
+  // Make sure we always respond (no timeouts)
   try {
-    const parts = String(interaction.customId || "").split(":");
-    const kind = parts[0];
-    const eventId = parts[1];
-
-    if (kind !== "rsvp_modal" || !eventId) return;
-
-    // Defer instantly to avoid 3s timeout while we update stuff
-    await interaction.deferReply({ ephemeral: true });
-
-    const state = ensureState(rsvpStore, eventId, null);
+    const state = ensureState(eventId);
+    if (!state) {
+      return await interaction.reply({ content: "❌ This event is no longer active.", ephemeral: true });
+    }
 
     const userId = interaction.user.id;
-    const psn = interaction.fields.getTextInputValue("psn")?.trim();
-    const ig = interaction.fields.getTextInputValue("ig")?.trim();
 
-    if (!psn) return await interaction.editReply("⚠️ PSN is required.");
+    // Remove user from both lists first (clean slate)
+    const wasConfirmed = state.confirmed.delete(userId);
+    state.waitlist = state.waitlist.filter((id) => id !== userId);
 
-    const entry = { userId, psn, ig: ig || null };
-
-    // If already in lists, update details
-    if (isIn(state.going, userId)) {
-      upsertUser(state.going, entry);
-      await updateEventMessage(interaction, state, eventId).catch(() => {});
-      await updateStaffRoster(interaction, state, eventId).catch(() => {});
-      await postRsvpToApp({ type: "rsvp_update", eventId, userId, status: "rsvp", psn, ig: ig || null }).catch(() => {});
-      return await interaction.editReply("✅ Updated your RSVP details.");
+    if (action === "yes" || action === "join") {
+      if (state.confirmed.size < state.maxSlots) {
+        state.confirmed.add(userId);
+      } else {
+        state.waitlist.push(userId);
+      }
+    } else if (action === "no") {
+      // do nothing (already removed)
+    } else if (action === "cancel") {
+      // If they cancelled and they WERE confirmed, promote next from waitlist
+      if (wasConfirmed && state.waitlist.length > 0) {
+        const nextId = state.waitlist.shift();
+        state.confirmed.add(nextId);
+      }
     }
 
-    if (isIn(state.waitlist, userId)) {
-      upsertUser(state.waitlist, entry);
-      await updateEventMessage(interaction, state, eventId).catch(() => {});
-      await updateStaffRoster(interaction, state, eventId).catch(() => {});
-      await postRsvpToApp({ type: "rsvp_update", eventId, userId, status: "waitlist", psn, ig: ig || null }).catch(() => {});
-      return await interaction.editReply("✅ Updated your waitlist details.");
-    }
+    const original = interaction.message?.embeds?.[0] || null;
+    const embed = rebuildEmbed(original, state);
 
-    // Add to going if space, else waitlist
-    const capped = state.maxPlayers && state.maxPlayers > 0;
-
-    if (!capped || state.going.length < state.maxPlayers) {
-      state.going.push(entry);
-      await updateEventMessage(interaction, state, eventId).catch(() => {});
-      await updateStaffRoster(interaction, state, eventId).catch(() => {});
-      await postRsvpToApp({ type: "rsvp_update", eventId, userId, status: "rsvp", psn, ig: ig || null }).catch(() => {});
-      return await interaction.editReply("✅ You are RSVP’d.");
-    } else {
-      state.waitlist.push(entry);
-      await updateEventMessage(interaction, state, eventId).catch(() => {});
-      await updateStaffRoster(interaction, state, eventId).catch(() => {});
-      await postRsvpToApp({ type: "rsvp_update", eventId, userId, status: "waitlist", psn, ig: ig || null }).catch(() => {});
-      return await interaction.editReply("⏳ Event is full — you’ve been added to the waitlist.");
-    }
-
+    return await interaction.update({
+      embeds: [embed],
+      components: interaction.message.components,
+    });
   } catch (e) {
-    console.error("❌ handleModal error:", e);
+    console.error("RSVP button error:", e);
     try {
       if (!interaction.replied && !interaction.deferred) {
-        return await interaction.reply({ content: "⚠️ Interaction failed. Try again.", ephemeral: true });
+        return await interaction.reply({ content: "⚠️ RSVP failed. Try again.", ephemeral: true });
       }
       if (interaction.deferred && !interaction.replied) {
-        return await interaction.editReply("⚠️ Interaction failed. Try again.");
+        return await interaction.editReply("⚠️ RSVP failed. Try again.");
       }
     } catch {}
   }
 }
 
-async function updateEventMessage(interaction, state, eventId) {
-  if (!state.channelId || !state.messageId) return;
-
-  const channel = await interaction.client.channels.fetch(state.channelId).catch(() => null);
-  if (!channel) return;
-
-  const msg = await channel.messages.fetch(state.messageId).catch(() => null);
-  if (!msg) return;
-
-  const old = msg.embeds?.[0];
-  const title = old?.title || "Event";
-  const desc = old?.description || " ";
-
-  const c = counts(state);
-  const oldTimeField = (old?.fields || []).find(f => f?.name === "Time");
-
-  // Rebuild embed quickly
-  const embed = {
-    title,
-    description: desc,
-    fields: [
-      ...(oldTimeField ? [oldTimeField] : []),
-      { name: "RSVP", value: state.maxPlayers > 0 ? `${c.going}/${c.maxPlayers}` : `${c.going}`, inline: true },
-      { name: "Waitlist", value: `${c.waitlist}`, inline: true },
-    ],
-    footer: { text: "Event Nexus" },
-    timestamp: new Date().toISOString(),
-  };
-
-  const img = old?.image?.url;
-  if (img) embed.image = { url: img };
-
-  await msg.edit({ embeds: [embed], components: [buildRsvpRow(eventId)] });
-}
-
-async function updateStaffRoster(interaction, state, eventId) {
-  const staffChannelId = STAFF_LOG_CHANNEL || state.channelId;
-  if (!staffChannelId) return;
-
-  const channel = await interaction.client.channels.fetch(staffChannelId).catch(() => null);
-  if (!channel) return;
-
-  // Minimal staff log for now (we’ll make it role-private by channel perms)
-  const going = state.going.map(x => `<@${x.userId}> (PSN: ${x.psn}${x.ig ? ` | IG: ${x.ig}` : ""})`).join("\n") || "None";
-  const wait = state.waitlist.map(x => `<@${x.userId}> (PSN: ${x.psn}${x.ig ? ` | IG: ${x.ig}` : ""})`).join("\n") || "None";
-
-  const embed = {
-    title: `Staff Roster — ${eventId}`,
-    fields: [
-      { name: `Going (${state.going.length})`, value: going.slice(0, 3900) },
-      { name: `Waitlist (${state.waitlist.length})`, value: wait.slice(0, 3900) },
-    ],
-    footer: { text: "Staff only (lock this channel to staff)" },
-    timestamp: new Date().toISOString(),
-  };
-
-  if (state.staffMessageId) {
-    const msg = await channel.messages.fetch(state.staffMessageId).catch(() => null);
-    if (msg) return await msg.edit({ embeds: [embed] });
+// Keep this export because src/index.js calls it
+export async function handleModal(interaction) {
+  if (!interaction?.isModalSubmit?.()) return;
+  // Not used in the current RSVP flow; respond anyway so Discord never times out
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.reply({ content: "✅ Received.", ephemeral: true });
   }
-
-  const sent = await channel.send({ embeds: [embed] });
-  state.staffMessageId = sent.id;
-  state.staffChannelId = staffChannelId;
 }
