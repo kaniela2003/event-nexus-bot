@@ -5,7 +5,6 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
-
 import { startSyncHub, attachDiscordClient } from "./syncHub.js";
 import { handleRsvpButton } from "./rsvp.js";
 
@@ -19,7 +18,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Channel],
 });
@@ -28,7 +27,7 @@ client.commands = new Collection();
 
 console.log("🔍 Loading commands...");
 const commandsPath = path.join(__dirname, "commands");
-const files = fs.readdirSync(commandsPath).filter((f) => f.endsWith(".js"));
+const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
 
 for (const file of files) {
   const mod = await import(`file://${path.join(commandsPath, file)}`);
@@ -58,15 +57,10 @@ client.on("interactionCreate", async (i) => {
       return await cmd.execute(i);
     }
 
-    // RSVP Buttons (2-button system)
     if (i.isButton()) {
-      const id = String(i.customId || "");
-      if (id.startsWith("rsvp:")) {
-        console.log(`🧷 RSVP Button: ${id} by ${i.user?.tag || i.user?.id}`);
-        // IMPORTANT: Do NOT deferReply here — rsvp.js uses interaction.update()
-        return await handleRsvpButton(i);
-      }
-      return;
+      console.log(`🧷 Button: ${i.customId} by ${i.user?.tag || i.user?.id}`);
+      // Handle RSVP buttons (always responds fast via deferUpdate)
+      return await handleRsvpButton(i);
     }
   } catch (e) {
     console.error("❌ interactionCreate error:", e);

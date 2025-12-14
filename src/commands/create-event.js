@@ -1,28 +1,23 @@
-﻿import {
-  SlashCommandBuilder,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-} from "discord.js";
+﻿// src/commands/create-event.js
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import axios from "axios";
-import { registerEvent } from "./rsvp-buttons.js";
+import { registerEvent } from "../rsvp.js";
 
-const apiBase = process.env.NEXUS_API_URL;        // e.g. https://eventnexus.base44.app/functions/api
-const apiKey  = process.env.NEXUS_API_KEY;        // optional if your Base44 function checks it
+const apiUrl = process.env.NEXUS_API_URL;   // Base44 Function URL
+const apiKey = process.env.NEXUS_API_KEY;   // Base44 api_key value
 const defaultChannelId = process.env.DEFAULT_EVENT_CHANNEL;
 
 export const data = new SlashCommandBuilder()
   .setName("createevent")
   .setDescription("Create an Event Nexus event (syncs to app + posts RSVP buttons).")
-  .addStringOption((opt) => opt.setName("title").setDescription("Event title").setRequired(true))
-  .addStringOption((opt) => opt.setName("start").setDescription("Start time (e.g. 2025-12-20 8:00 PM PST)").setRequired(true))
-  .addStringOption((opt) => opt.setName("end").setDescription("End time (optional)").setRequired(false))
-  .addStringOption((opt) => opt.setName("description").setDescription("Event description").setRequired(false))
-  .addIntegerOption((opt) => opt.setName("maxplayers").setDescription("Max players (optional)").setRequired(false))
-  .addAttachmentOption((opt) => opt.setName("image").setDescription("Event image (optional)").setRequired(false));
+  .addStringOption(opt => opt.setName("title").setDescription("Event title").setRequired(true))
+  .addStringOption(opt => opt.setName("start").setDescription("Start time (e.g. 2025-12-20 8:00 PM PST)").setRequired(true))
+  .addStringOption(opt => opt.setName("end").setDescription("End time (optional)").setRequired(false))
+  .addStringOption(opt => opt.setName("description").setDescription("Event description (optional)").setRequired(false))
+  .addIntegerOption(opt => opt.setName("maxplayers").setDescription("Max players (optional)").setRequired(false))
+  .addAttachmentOption(opt => opt.setName("image").setDescription("Event image (optional)").setRequired(false));
 
-function toDiscordTs(value, style = "F") {
+function toDiscordTs(value, style="F") {
   if (!value) return String(value || "");
   const d = new Date(String(value).replace(" ", "T"));
   if (!isNaN(d.getTime())) {
@@ -32,17 +27,19 @@ function toDiscordTs(value, style = "F") {
   return String(value);
 }
 
-function buildRsvpRow(eventId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`rsvp_join:${eventId}`)
-      .setLabel("RSVP ✅")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`rsvp_cancel:${eventId}`)
-      .setLabel("Cancel ❌")
-      .setStyle(ButtonStyle.Danger)
+function buildRsvpRows(eventId) {
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`rsvp:vip:${eventId}`).setLabel("VIP ⭐").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`rsvp:yes:${eventId}`).setLabel("Yes ✅").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`rsvp:maybe:${eventId}`).setLabel("Maybe 🤔").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`rsvp:no:${eventId}`).setLabel("No ❌").setStyle(ButtonStyle.Danger)
   );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`rsvp:cancel:${eventId}`).setLabel("Cancel / Remove 🧹").setStyle(ButtonStyle.Secondary)
+  );
+
+  return [row1, row2];
 }
 
 export async function execute(interaction) {
@@ -52,60 +49,58 @@ export async function execute(interaction) {
   const start = interaction.options.getString("start", true);
   const end = interaction.options.getString("end", false) || null;
   const description = interaction.options.getString("description", false) || null;
-  const maxPlayers = interaction.options.getInteger("maxplayers", false) || 30;
+  const maxPlayers = interaction.options.getInteger("maxplayers", false) ?? 0;
   const image = interaction.options.getAttachment("image", false);
 
-  // 1) Sync to app (best-effort; do NOT block Discord posting)
+  // 1) Sync to app (Base44) FIRST (best-effort, keep your current setup)
   let appEventId = null;
   let appOk = false;
   let appErr = null;
 
-  if (apiBase) {
+  if (!apiUrl || !apiKey) {
+    appErr = "Missing NEXUS_API_URL or NEXUS_API_KEY in environment.";
+  } else {
     try {
       const payload = {
-        title,
-        startTime: start,
-        endTime: end,
-        description,
-        maxPlayers,
-        imageUrl: image?.url || null,
-        guildId: interaction.guildId,
-        channelId: defaultChannelId || interaction.channelId,
-        createdById: interaction.user.id,
-        createdByTag: interaction.user.tag,
+        type: "discord_event_create",
+        event: {
+          title,
+          startTime: start,
+          endTime: end,
+          description,
+          maxPlayers: maxPlayers || null,
+          imageUrl: image?.url || null,
+          createdBy: interaction.user?.tag || interaction.user?.id
+        }
       };
 
-      const headers = { "Content-Type": "application/json" };
-      if (apiKey) headers["api_key"] = apiKey;
+      const res = await axios.post(apiUrl, payload, {
+        headers: { "Content-Type": "application/json", "api_key": apiKey },
+        timeout: 12000
+      });
 
-      // NOTE: expects POST {NEXUS_API_URL}/events (per your project snapshot)
-      const res = await axios.post(`${apiBase}/events`, payload, { headers, timeout: 12000 });
-
-      appEventId =
-        res?.data?.id ||
-        res?.data?.event?.id ||
-        res?.data?.savedEventId ||
-        res?.data?.data?.id ||
-        null;
-
+      appEventId = res?.data?.id || res?.data?.event?.id || res?.data?.savedEventId || res?.data?.data?.id || null;
       appOk = true;
     } catch (e) {
       appErr = e?.response?.data || e?.message || String(e);
     }
-  } else {
-    appErr = "Missing NEXUS_API_URL in environment.";
   }
 
-  // 2) Post to Discord
+  // 2) Post in Discord (use app id if present, otherwise stable discord fallback)
   const eventId = appEventId || `discord-${interaction.id}`;
-  registerEvent(eventId, maxPlayers);
+
+  // Register in-memory RSVP tracking
+  registerEvent(eventId, maxPlayers || 0);
 
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription(description || "No description provided.")
     .addFields(
-      { name: "Time", value: end ? `${toDiscordTs(start, "F")} → ${toDiscordTs(end, "t")}` : `${toDiscordTs(start, "F")}`, inline: false },
-      { name: `Spots (0/${maxPlayers})`, value: "—", inline: false },
+      { name: "Time", value: end ? `${toDiscordTs(start,"F")} → ${toDiscordTs(end,"t")}` : `${toDiscordTs(start,"F")}`, inline: false },
+      { name: maxPlayers > 0 ? `Spots (0/${maxPlayers})` : "Spots (0)", value: " ", inline: false },
+      { name: "VIP (0)", value: "—", inline: false },
+      { name: "Going (0)", value: "—", inline: false },
+      { name: "Maybe (0)", value: "—", inline: false },
       { name: "Waitlist (0)", value: "—", inline: false }
     )
     .setFooter({ text: "Event Nexus" })
@@ -113,20 +108,14 @@ export async function execute(interaction) {
 
   if (image?.url) embed.setImage(image.url);
 
-  const row = buildRsvpRow(eventId);
+  const rows = buildRsvpRows(eventId);
 
   const channelId = defaultChannelId || interaction.channelId;
   const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
-  if (!channel) {
-    return await interaction.editReply(`❌ Could not post event: cannot access channel ${channelId}`);
-  }
+  if (!channel) return await interaction.editReply(`❌ Could not post event: cannot access channel ${channelId}`);
 
-  await channel.send({ embeds: [embed], components: [row] });
+  await channel.send({ embeds: [embed], components: rows });
 
-  if (appOk) {
-    return await interaction.editReply(`✅ Event created + synced to app. (Event ID: ${eventId})`);
-  }
-
-  const short = typeof appErr === "string" ? appErr : JSON.stringify(appErr);
-  return await interaction.editReply(`⚠️ Event posted to Discord, but app sync FAILED.\nReason: ${String(short).slice(0, 900)}`);
+  if (appOk) return await interaction.editReply(`✅ Event created + synced to app. (Event ID: ${eventId})`);
+  return await interaction.editReply(`⚠️ Event posted to Discord, but app sync FAILED.\nReason: ${JSON.stringify(appErr).slice(0, 900)}`);
 }
