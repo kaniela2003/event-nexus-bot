@@ -1,5 +1,25 @@
 ﻿import axios from "axios";
 
+async function syncRsvpToBase44(payload) {
+  const base = process.env.NEXUS_API_URL;
+  const key  = process.env.BASE44_API_KEY || process.env.NEXUS_API_KEY;
+
+  if (!base) return;
+
+  try {
+    await axios.post(`${base}/rsvp`, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(key ? { api_key: key } : {})
+      },
+      timeout: 8000
+    });
+  } catch (e) {
+    // Don’t break Discord if Base44 fails
+    console.log("RSVP->Base44 sync failed:", e?.response?.status || "", e?.response?.data || e?.message || String(e));
+  }
+}
+
 // In-memory RSVP map (eventId -> { going:Set<string> })
 const state = new Map();
 
@@ -76,3 +96,4 @@ export async function handleRsvpButton(i) {
     await msg.edit({ embeds: [next] }).catch(() => {});
   } catch {}
 }
+
