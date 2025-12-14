@@ -1,5 +1,21 @@
 ﻿import axios from "axios";
 
+async function postRsvpToBase44({ eventId, userId, action }) {
+  const base = process.env.NEXUS_API_URL;          // https://eventnexus.base44.app/functions/api
+  const key  = process.env.NEXUS_API_KEY || process.env.BASE44_API_KEY;  // whatever you already use
+  if (!base || !key) return;
+
+  try {
+    await axios.post(
+      `${base}/rsvp`,
+      { eventId, userId, action },
+      { headers: { "Content-Type": "application/json", "x-api-key": key }, timeout: 8000 }
+    );
+  } catch (e) {
+    console.log("RSVP->Base44 failed:", e?.response?.status || "", e?.response?.data || e?.message || String(e));
+  }
+}
+
 async function syncRsvpToBase44(payload) {
   const base = process.env.NEXUS_API_URL;
   const key  = process.env.BASE44_API_KEY || process.env.NEXUS_API_KEY;
@@ -96,4 +112,5 @@ export async function handleRsvpButton(i) {
     await msg.edit({ embeds: [next] }).catch(() => {});
   } catch {}
 }
+
 
